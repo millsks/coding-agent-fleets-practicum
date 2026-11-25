@@ -1,0 +1,4 @@
+id = "m04-lab2"
+title = "Checks must pass before stopping"
+module = "m04"
+sample = true

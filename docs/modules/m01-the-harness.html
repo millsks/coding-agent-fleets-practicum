@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M01 · The Harness · Coding Agent Fleets Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/fleetlab-src.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-agent.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m01">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Stage 1 · One Agent · Module 01</p>
+    <h1>The Harness</h1>
+    <p class="lede">Before you write your own agents, look at the one you already have. Claude Code is a model
+      running in a loop with tools, permissions, and settings around it. This module takes that harness apart: what
+      the loop does, which tools it has, who decides whether a tool call runs, how to run it without a terminal, and
+      how to read the transcript it leaves behind. Every agent in your fleet runs inside this same harness.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m00-orientation.html">M00 How This Practicum Works</a></span></div>
+    <ul class="objectives">
+      <li>Describe the gather, act, verify loop and name where it usually goes wrong</li>
+      <li>List Claude Code's core built-in tools and sort them into read-only and state-changing</li>
+      <li>Explain permission modes and allow, ask, and deny rules, including how <code>Bash(git diff *)</code> matches</li>
+      <li>Say which settings file a rule belongs in and which file wins when they disagree</li>
+      <li>Run Claude Code headlessly with <code>-p</code>, choose an output format, and know what <code>--bare</code> changes</li>
+      <li>Read a <code>stream-json</code> transcript: count turns and tool calls, find failures, and spot a loop</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="loop">
+    <h2>The loop inside Claude Code</h2>
+    <p>Under the interface, Claude Code runs the same loop every agent runs. You send a task. The model replies
+      either with text or with one or more <strong>tool calls</strong>. Claude Code runs each call (if it's allowed),
+      sends the results back, and asks the model again. This repeats until the model replies without asking for a
+      tool. Each request and response is one <strong>turn</strong>.</p>
+    <p>A useful way to think about what happens across those turns is three phases that repeat:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Gather</h4><p>Read files, search with Grep and Glob, read the spec, look at logs and
+        <code>git diff</code>. The agent builds the context it needs to act.</p></div>
+      <div class="card"><h4>Act</h4><p>Edit and write files, run commands, call MCP tools, hand a sub-task to a
+        subagent.</p></div>
+      <div class="card"><h4>Verify</h4><p>Run the tests and linters, re-read the diff, compare the result with what
+        was asked. Then go around again or stop.</p></div>
+    </div>
+    <pre class="mermaid">
+flowchart LR
+  Task --> G[Gather] --> A[Act] --> V[Verify]
+  V -->|not done| G
+  V -->|done, out of turns, or blocked| Stop
+    </pre>
+    <p>Most agent failures are this loop going wrong in a recognisable way. The agent <em>stops too early</em>,
+      claiming success without running the tests. It <em>loops</em>, making the same failing edit again and again.
+      It <em>drifts</em>, editing files nobody asked about. It <em>starves</em>, acting before it has read the code
+      it's changing. You'll learn to spot each of these in transcripts at the end of this module, and to block them
+      with hooks in M04.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> the model decides what to do next; the harness decides
+      whether it's allowed, runs it, and decides when the loop must end.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="tools">
+    <h2>Built-in tools</h2>
+    <p>A tool is a function the model can ask the harness to run. Claude Code ships with a set of built-in tools.
+      These are the ones every agent definition in this course refers to by name:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Tool</th><th>What it does</th><th>Changes state?</th></tr></thead>
+      <tbody>
+        <tr><td><code>Read</code></td><td>Read a file (or part of one)</td><td>No</td></tr>
+        <tr><td><code>Grep</code></td><td>Search file contents with a regular expression</td><td>No</td></tr>
+        <tr><td><code>Glob</code></td><td>Find files by name pattern</td><td>No</td></tr>
+        <tr><td><code>Edit</code></td><td>Replace an exact string in a file</td><td>Yes</td></tr>
+        <tr><td><code>Write</code></td><td>Create or overwrite a file</td><td>Yes</td></tr>
+        <tr><td><code>Bash</code></td><td>Run a shell command</td><td>Yes: anything a shell can do</td></tr>
+        <tr><td><code>Agent</code></td><td>Start a subagent with its own context and tools</td><td>Whatever the subagent can do</td></tr>
+        <tr><td><code>WebFetch</code>, <code>WebSearch</code></td><td>Read a URL, search the web</td><td>No, but they bring in untrusted text</td></tr>
+        <tr><td><code>TodoWrite</code></td><td>Keep a task list during a session</td><td>Only the session's list</td></tr>
+      </tbody>
+    </table></div>
+    <p>Two things in that table matter more than they look. First, <code>Bash</code> is effectively every tool: an
+      agent with <code>Bash</code> can edit files with <code>sed</code>, delete them, or push to a remote. An agent
+      you mean to be read-only must not have it, or must have it limited by permission rules. Second, tools from MCP
+      servers appear alongside these with names like <code>mcp__github__get_issue</code> (server
+      <code>github</code>, tool <code>get_issue</code>). They follow the same permission system.</p>
+    <aside class="callout think"><p>A "reviewer" agent has <code>Read</code>, <code>Grep</code>, <code>Glob</code>,
+      and <code>Bash</code> so it can run <code>git diff</code>. Can it change your code? What would you add to make
+      sure it can't?</p></aside>
+  </section>
+
+  <section class="lesson-section" id="permissions">
+    <h2>Who decides: permission modes and rules</h2>
+    <p>Every tool call passes through the permission system before it runs. Two things decide the outcome: the
+      session's <strong>permission mode</strong> and your <strong>permission rules</strong>.</p>
+    <h3>Permission modes</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>Mode</th><th>Behaviour</th><th>Use it for</th></tr></thead>
+      <tbody>
+        <tr><td><code>default</code> (also called manual)</td><td>Asks before anything that isn't pre-approved; reads in your working directory don't need approval</td><td>Interactive work</td></tr>
+        <tr><td><code>acceptEdits</code></td><td>File edits and common filesystem commands run without asking; other shell commands still need a rule</td><td>Builders you're watching</td></tr>
+        <tr><td><code>plan</code></td><td>Read-only: the agent explores and proposes, but doesn't change anything</td><td>Planning, risky changes</td></tr>
+        <tr><td><code>auto</code></td><td>A classifier reviews each action instead of asking you</td><td>Long unattended runs with oversight</td></tr>
+        <tr><td><code>dontAsk</code></td><td>Anything that would prompt is denied; only pre-approved actions run</td><td>Locked-down CI</td></tr>
+        <tr><td><code>bypassPermissions</code></td><td>Nothing asks. Everything runs</td><td>Only disposable sandboxes</td></tr>
+      </tbody>
+    </table></div>
+    <h3>Permission rules</h3>
+    <p>Rules live in a settings file under <code>permissions</code>, in three lists: <code>allow</code> (run without
+      asking), <code>ask</code> (always ask), and <code>deny</code> (never run). A rule names a tool, optionally with
+      a pattern in parentheses:</p>
+    <pre><code class="language-json">{
+  "permissions": {
+    "allow": ["Read", "Bash(python -m pytest *)", "Bash(git diff *)"],
+    "deny":  ["Bash(git push *)", "Read(.env)", "Edit(.github/workflows/**)"]
+  }
+}</code></pre>
+    <p>For <code>Bash</code>, a trailing <code>&nbsp;*</code> (a space, then a star) means "any command that starts
+      with this". The space matters: <code>Bash(git diff *)</code> matches <code>git diff main</code> but not
+      <code>git diff-index</code>, while <code>Bash(git diff*)</code> matches both. Deny rules win over allow rules,
+      and the same rule syntax is used for the <code>--allowedTools</code> flag in headless runs.</p>
+    <p>Try the matching logic yourself. This is a simplified model of Bash rules (real rules also understand
+      compound commands like <code>a &amp;&amp; b</code>), but it shows the precedence:</p>
+    <div class="runnable" data-title="Simplified Bash rule matching">
+<textarea>
+def rule_matches(rule, command):
+    inner = rule[len("Bash("):-1]
+    if inner.endswith(" *"):
+        prefix = inner[:-2]
+        return command == prefix or command.startswith(prefix + " ")
+    return command == inner
+
+def decide(command, allow, deny):
+    if any(rule_matches(r, command) for r in deny):
+        return "deny"
+    if any(rule_matches(r, command) for r in allow):
+        return "allow"
+    return "ask"
+
+allow = ["Bash(git diff *)", "Bash(python -m pytest *)"]
+deny = ["Bash(git push *)"]
+for cmd in ["git diff main", "git diff-index HEAD", "git push origin main", "python -m pytest -q", "rm -rf build"]:
+    print(f"{cmd:24} -> {decide(cmd, allow, deny)}")
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Rules are a <em>guide</em>, not a sandbox. A determined or confused agent with a
+      broad <code>Bash</code> allowance can reach the same effect another way (<code>python -c</code> instead of
+      <code>rm</code>). For things that must never happen, add a hook (M04) and an outside control such as branch
+      protection.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="settings">
+    <h2>Settings files and which one wins</h2>
+    <p>Permission rules, hooks, environment variables, and many other options live in JSON settings files. Claude
+      Code reads several and merges them:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>File</th><th>Scope</th><th>Commit it?</th></tr></thead>
+      <tbody>
+        <tr><td><code>~/.claude/settings.json</code></td><td>You, in every project</td><td>No (it's in your home directory)</td></tr>
+        <tr><td><code>.claude/settings.json</code></td><td>Everyone working in this project</td><td>Yes: this is where a fleet's shared rules and hooks go</td></tr>
+        <tr><td><code>.claude/settings.local.json</code></td><td>You, in this project</td><td>No: gitignore it</td></tr>
+        <tr><td><code>--settings &lt;file-or-json&gt;</code></td><td>One run</td><td>It's a flag, so whatever script passes it</td></tr>
+        <tr><td>Managed settings</td><td>An organization's administrators</td><td>Deployed by IT, not by you</td></tr>
+      </tbody>
+    </table></div>
+    <p>When files disagree on a single value, the more specific one wins: managed settings over everything, then
+      command-line settings, then local, then project, then user. Lists such as hooks are combined across files
+      rather than replaced. For a fleet, the rule of thumb is simple: anything every agent must obey goes in the
+      committed <code>.claude/settings.json</code>, so it travels with the repository into every worktree and CI
+      job.</p>
+    <aside class="callout note"><p>At work you may see settings you didn't write and can't override. That's managed
+      settings doing its job. Design your harness so that its real enforcement (tests, hooks, CI) still works when
+      an administrator has locked other options down.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="headless">
+    <h2>Running without a terminal: headless mode</h2>
+    <p>A fleet runs agents from scripts and CI, not from a chat window. <code>claude -p "&lt;prompt&gt;"</code> (or
+      <code>--print</code>) runs one task non-interactively and exits: 0 on success, non-zero when the run fails.
+      These are the options you'll combine with it most:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Option</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>--output-format text|json|stream-json</code></td><td><code>json</code> prints one object with the result, session id, cost, and usage; <code>stream-json</code> prints one JSON event per line as the run happens (add <code>--verbose</code>)</td></tr>
+        <tr><td><code>--allowedTools "Read,Grep,Bash(git diff *)"</code></td><td>Pre-approve tools using permission-rule syntax</td></tr>
+        <tr><td><code>--permission-mode dontAsk|acceptEdits|plan|...</code></td><td>Set the baseline mode for the run</td></tr>
+        <tr><td><code>--max-turns N</code></td><td>Stop after N agentic turns</td></tr>
+        <tr><td><code>--append-system-prompt "..."</code></td><td>Add instructions while keeping Claude Code's defaults</td></tr>
+        <tr><td><code>--json-schema '{...}'</code></td><td>With <code>json</code> output, return schema-valid data in <code>structured_output</code></td></tr>
+        <tr><td><code>--bare</code></td><td>Skip auto-discovery: no hooks, skills, subagents, plugins, MCP servers, or CLAUDE.md unless you pass them with flags</td></tr>
+        <tr><td><code>--resume &lt;session-id&gt;</code>, <code>--continue</code></td><td>Continue an earlier conversation</td></tr>
+      </tbody>
+    </table></div>
+    <p>In a headless run nobody can answer a permission prompt, so a call that would need approval is denied unless
+      a rule, a mode, or a hook allows it. That's a feature: a CI job should only be able to do what you listed.</p>
+    <p><code>--bare</code> deserves a closer look. Without it, <code>claude -p</code> loads everything an interactive
+      session would, including the hooks in the repository's <code>.claude/settings.json</code> and the servers in
+      its <code>.mcp.json</code>, without the trust prompt an interactive session shows. In CI that means a pull
+      request could change what runs. With <code>--bare</code>, only what you pass on the command line applies, so
+      every run is the same everywhere. It also skips your subscription login and reads
+      <code>ANTHROPIC_API_KEY</code> from the environment.</p>
+    <pre data-label="Terminal"><code class="language-bash"># a read-only review that returns JSON, with a hard turn limit
+claude --bare -p "Review the diff in change.patch for bugs. Report file:line for each." \
+  --allowedTools "Read,Grep,Glob" \
+  --max-turns 10 \
+  --output-format json | jq -r '.result'</code></pre>
+    <aside class="callout tip"><p><strong>Remember:</strong> in scripts and CI use <code>-p</code>, list tools
+      explicitly, cap turns, and prefer <code>--bare</code> with everything passed as flags. You'll build exactly
+      this in Stage 2.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="transcripts">
+    <h2>Reading a run</h2>
+    <p>With <code>--output-format stream-json --verbose</code>, every event in the run is printed as one JSON object
+      per line. Reading these transcripts is how you debug agents: you see exactly what the model was given, what
+      it asked for, and what came back. The events that matter most:</p>
+    <ul>
+      <li><code>{"type": "system", "subtype": "init", ...}</code>: the session id, the model, and the tools available.</li>
+      <li><code>{"type": "assistant", "message": {"content": [...]}}</code>: the model's text and its
+        <code>tool_use</code> blocks, each with an <code>id</code>, a <code>name</code>, and an <code>input</code>.</li>
+      <li><code>{"type": "user", "message": {"content": [...]}}</code>: the <code>tool_result</code> blocks sent back,
+        each pointing at a call by <code>tool_use_id</code>, with <code>is_error</code> set when the tool failed.</li>
+      <li><code>{"type": "result", ...}</code>: the last line, with <code>subtype</code> (<code>"success"</code> or an
+        error kind), <code>is_error</code>, <code>num_turns</code>, <code>total_cost_usd</code>, and the final
+        <code>result</code> text.</li>
+    </ul>
+    <p>Messages from subagents carry the id of the tool call that started them in
+      <code>parent_tool_use_id</code>; messages from the main conversation carry <code>null</code>. The cell below
+      parses a short, abridged transcript of an agent fixing shelf issue #1. Read the output before reading on.</p>
+    <div class="runnable" data-title="Parse a transcript">
+<textarea>
+import json, fleetlab
+
+events = [
+    {"type": "system", "subtype": "init", "session_id": "a1", "model": "claude-sonnet-5-5", "tools": ["Read", "Edit", "Bash", "Grep"]},
+    {"type": "assistant", "parent_tool_use_id": None, "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "Grep", "input": {"pattern": "def search"}}]}},
+    {"type": "user", "parent_tool_use_id": None, "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "shelf/store.py:31:def search(books, term):"}]}},
+    {"type": "assistant", "parent_tool_use_id": None, "message": {"content": [
+        {"type": "tool_use", "id": "t2", "name": "Edit", "input": {"file_path": "shelf/store.py"}}]}},
+    {"type": "user", "parent_tool_use_id": None, "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "t2", "content": "ok"}]}},
+    {"type": "assistant", "parent_tool_use_id": None, "message": {"content": [
+        {"type": "text", "text": "Search now ignores case."}]}},
+    {"type": "result", "subtype": "success", "is_error": False, "num_turns": 3, "total_cost_usd": 0.021, "result": "Search now ignores case."},
+]
+run = fleetlab.parse_stream("\n".join(json.dumps(e) for e in events))
+print("model:", run.model, "| turns:", run.num_turns, "| cost: $%.3f" % run.cost_usd)
+print("calls:", run.calls_by_tool())
+print("final:", run.texts[-1])
+</textarea>
+    </div>
+    <p>It succeeded, cheaply. And it's wrong in a way the result line will never tell you: there is no
+      <code>Bash</code> call, so the agent never ran the tests. It edited the file and declared victory. That's the
+      <em>premature done</em> failure from the start of this module, and you found it by reading the transcript, not
+      the summary.</p>
+  </section>
+
+  <section class="lesson-section" id="failure-signatures">
+    <h2>Failure signatures in transcripts</h2>
+    <p>Each loop failure leaves a recognisable trace. Learn to look for these:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Failure</th><th>What it looks like in the transcript</th><th>Harness fix (later modules)</th></tr></thead>
+      <tbody>
+        <tr><td>Premature done</td><td>Edits, then a final message, with no test command after the last edit</td><td>A Stop hook that runs the tests (M04)</td></tr>
+        <tr><td>Doom loop</td><td>The same tool with the same input several times in a row, each result an error</td><td>Turn limits, error-signature checks, escalation (M04, Stage 2)</td></tr>
+        <tr><td>Drift</td><td>Edits to files the task never mentioned</td><td>A spec with "files in scope", a reviewer that checks it (M02)</td></tr>
+        <tr><td>Context starvation</td><td>Edits before any Read or Grep of the file being changed</td><td>Better instructions and a map in AGENTS.md (M03)</td></tr>
+        <tr><td>Shallow fix</td><td>A test file edited to remove or loosen an assertion</td><td>A hook that keeps the builder out of <code>tests/</code> (M04)</td></tr>
+      </tbody>
+    </table></div>
+    <p>The exercises below turn three of these into code. In the lab you write a command-line summariser you can
+      point at any real transcript.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Five exercises on transcripts, permission rules, and headless commands. Tests build their own transcripts
+      with <code>make_run</code>, a helper defined in the test code that turns a list of
+      <code>(tool, input, error?)</code> steps into stream-json text.</p>
+
+    <div class="exercise" data-id="m01-e1" data-title="Count tool calls">
+      <div class="exercise-prompt">
+        <p>Write <code>tool_counts(stream_text)</code> that returns a dictionary mapping each tool name to how many
+          times it was called in the run, using <code>fleetlab.parse_stream</code>. Count subagent calls too.</p>
+      </div>
+<textarea class="starter">
+import fleetlab
+
+def tool_counts(stream_text):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import json
+
+def make_run(steps, finished=True):
+    events = [{"type": "system", "subtype": "init", "session_id": "s", "model": "m", "tools": []}]
+    for i, (tool, tool_input, error) in enumerate(steps):
+        events.append({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": tool, "input": tool_input}]}})
+        events.append({"type": "user", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", "is_error": error}]}})
+    if finished:
+        events.append({"type": "result", "subtype": "success", "is_error": False, "num_turns": len(steps) + 1, "total_cost_usd": 0.01, "result": "done"})
+    return "\n".join(json.dumps(e) for e in events)
+
+def test_counts():
+    text = make_run([("Read", {"file_path": "a"}, False), ("Bash", {"command": "pytest"}, False), ("Read", {"file_path": "b"}, False)])
+    assert tool_counts(text) == {"Read": 2, "Bash": 1}, "count each tool name"
+
+def test_empty_run():
+    assert tool_counts(make_run([])) == {}, "a run with no calls gives an empty dict"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>fleetlab.parse_stream(text).calls</code> is the list of
+        calls; each has <code>.name</code>. The run object also has a method that does the counting.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">import fleetlab
+
+def tool_counts(stream_text):
+    return fleetlab.parse_stream(stream_text).calls_by_tool()</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m01-e2" data-title="Did it run the tests after its last edit?">
+      <div class="exercise-prompt">
+        <p>Write <code>verified_after_last_edit(stream_text)</code> that returns <code>True</code> when a
+          <code>Bash</code> call whose command contains <code>pytest</code> comes <em>after</em> the last
+          <code>Edit</code> or <code>Write</code> call. A run with no edits counts as verified. This is a detector
+          for the premature-done failure.</p>
+      </div>
+<textarea class="starter">
+import fleetlab
+
+def verified_after_last_edit(stream_text):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import json
+
+def make_run(steps):
+    events = [{"type": "system", "subtype": "init", "session_id": "s", "model": "m", "tools": []}]
+    for i, (tool, tool_input, error) in enumerate(steps):
+        events.append({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": tool, "input": tool_input}]}})
+        events.append({"type": "user", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", "is_error": error}]}})
+    events.append({"type": "result", "subtype": "success", "is_error": False, "num_turns": 1, "total_cost_usd": 0, "result": "ok"})
+    return "\n".join(json.dumps(e) for e in events)
+
+def test_tests_after_edit():
+    text = make_run([("Edit", {"file_path": "a.py"}, False), ("Bash", {"command": "python -m pytest -q"}, False)])
+    assert verified_after_last_edit(text) is True
+
+def test_tests_before_edit_only():
+    text = make_run([("Bash", {"command": "python -m pytest -q"}, False), ("Edit", {"file_path": "a.py"}, False)])
+    assert verified_after_last_edit(text) is False, "tests ran before the last edit, so the edit is unverified"
+
+def test_non_test_bash_does_not_count():
+    text = make_run([("Write", {"file_path": "a.py"}, False), ("Bash", {"command": "ls"}, False)])
+    assert verified_after_last_edit(text) is False, "only a pytest command counts as verification"
+
+def test_no_edits():
+    assert verified_after_last_edit(make_run([("Read", {"file_path": "a.py"}, False)])) is True
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Find the index of the last call whose name is
+        <code>Edit</code> or <code>Write</code>. Then look at the calls after that index.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">import fleetlab
+
+def verified_after_last_edit(stream_text):
+    calls = fleetlab.parse_stream(stream_text).calls
+    last_edit = -1
+    for i, call in enumerate(calls):
+        if call.name in ("Edit", "Write"):
+            last_edit = i
+    if last_edit == -1:
+        return True
+    return any(
+        c.name == "Bash" and "pytest" in c.input.get("command", "")
+        for c in calls[last_edit + 1:]
+    )</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m01-e3" data-title="Spot a doom loop">
+      <div class="exercise-prompt">
+        <p>Write <code>doom_loop(stream_text, repeats=3)</code> that returns <code>True</code> when the run contains
+          <code>repeats</code> or more <em>consecutive</em> calls with the same tool name and the same input, all of
+          which returned an error.</p>
+      </div>
+<textarea class="starter">
+import fleetlab
+
+def doom_loop(stream_text, repeats=3):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import json
+
+def make_run(steps):
+    events = [{"type": "system", "subtype": "init", "session_id": "s", "model": "m", "tools": []}]
+    for i, (tool, tool_input, error) in enumerate(steps):
+        events.append({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": tool, "input": tool_input}]}})
+        events.append({"type": "user", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", "is_error": error}]}})
+    return "\n".join(json.dumps(e) for e in events)
+
+FAIL = ("Bash", {"command": "pytest"}, True)
+
+def test_three_identical_failures():
+    assert doom_loop(make_run([FAIL, FAIL, FAIL])) is True
+
+def test_successes_do_not_count():
+    ok = ("Bash", {"command": "pytest"}, False)
+    assert doom_loop(make_run([ok, ok, ok])) is False, "repeated successful calls are not a doom loop"
+
+def test_must_be_consecutive():
+    other = ("Read", {"file_path": "a"}, False)
+    assert doom_loop(make_run([FAIL, FAIL, other, FAIL])) is False, "an unrelated call breaks the streak"
+
+def test_different_inputs_break_streak():
+    alt = ("Bash", {"command": "pytest -x"}, True)
+    assert doom_loop(make_run([FAIL, alt, FAIL])) is False, "a changed input means the agent tried something new"
+
+def test_custom_repeats():
+    assert doom_loop(make_run([FAIL, FAIL]), repeats=2) is True
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Walk the calls keeping a streak counter. A call continues the
+        streak when it is an error and has the same <code>(name, input)</code> as the previous call in the streak.
+        Otherwise reset: to 1 if the call is an error, to 0 if not.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">import json
+import fleetlab
+
+def doom_loop(stream_text, repeats=3):
+    streak, previous = 0, None
+    for call in fleetlab.parse_stream(stream_text).calls:
+        key = (call.name, json.dumps(call.input, sort_keys=True))
+        if call.is_error and key == previous:
+            streak += 1
+        elif call.is_error:
+            streak = 1
+        else:
+            streak = 0
+        previous = key if call.is_error else None
+        if streak >= repeats:
+            return True
+    return False</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m01-e4" data-title="Allow, ask, or deny">
+      <div class="exercise-prompt">
+        <p>Write <code>decide(command, allow, deny)</code> using the simplified Bash rule model from this module:
+          a rule is <code>Bash(&lt;text&gt;)</code>; if <code>&lt;text&gt;</code> ends with a space and a star it
+          matches the prefix exactly or the prefix followed by a space; otherwise it must match the whole command.
+          Deny wins over allow. Return <code>"deny"</code>, <code>"allow"</code>, or <code>"ask"</code>.</p>
+      </div>
+<textarea class="starter">
+def decide(command, allow, deny):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+ALLOW = ["Bash(git diff *)", "Bash(python -m pytest *)", "Bash(git status)"]
+DENY = ["Bash(git push *)", "Bash(git diff --output *)"]
+
+def test_prefix_allow():
+    assert decide("git diff main", ALLOW, DENY) == "allow"
+    assert decide("git diff", ALLOW, DENY) == "allow", "the bare prefix matches too"
+
+def test_space_matters():
+    assert decide("git diff-index HEAD", ALLOW, DENY) == "ask", "'git diff *' must not match 'git diff-index'"
+
+def test_exact_rule():
+    assert decide("git status", ALLOW, DENY) == "allow"
+    assert decide("git status -s", ALLOW, DENY) == "ask", "a rule without ' *' matches only the exact command"
+
+def test_deny_wins():
+    assert decide("git diff --output x.patch", ALLOW, DENY) == "deny", "deny beats a matching allow"
+    assert decide("git push origin main", ALLOW, DENY) == "deny"
+
+def test_unknown_asks():
+    assert decide("rm -rf build", ALLOW, DENY) == "ask"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Write a helper <code>matches(rule, command)</code> first. Strip
+        <code>Bash(</code> and the closing parenthesis, then handle the two cases.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">def matches(rule, command):
+    inner = rule[len("Bash("):-1]
+    if inner.endswith(" *"):
+        prefix = inner[:-2]
+        return command == prefix or command.startswith(prefix + " ")
+    return command == inner
+
+def decide(command, allow, deny):
+    if any(matches(r, command) for r in deny):
+        return "deny"
+    if any(matches(r, command) for r in allow):
+        return "allow"
+    return "ask"</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m01-e5" data-title="Build a headless command">
+      <div class="exercise-prompt">
+        <p>Write <code>review_command(prompt, max_turns=10)</code> that returns the argument list (as for
+          <code>subprocess.run</code>) for a <strong>read-only, reproducible</strong> headless review. It must start
+          with <code>"claude"</code>, use <code>--bare</code> and <code>-p</code> with the prompt, allow exactly the
+          tools <code>Read,Grep,Glob</code>, set the turn limit, and ask for <code>json</code> output.</p>
+      </div>
+<textarea class="starter">
+def review_command(prompt, max_turns=10):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def flag(argv, name):
+    assert name in argv, f"missing {name}"
+    return argv[argv.index(name) + 1]
+
+def test_shape():
+    argv = review_command("Review change.patch")
+    assert argv[0] == "claude", "start with the claude executable"
+    assert "--bare" in argv, "use --bare so only what you pass applies"
+    assert flag(argv, "-p") == "Review change.patch", "-p is followed by the prompt"
+
+def test_tools_read_only():
+    tools = set(review_command("x")[review_command("x").index("--allowedTools") + 1].split(","))
+    assert tools == {"Read", "Grep", "Glob"}, f"allow exactly Read, Grep, Glob (got {sorted(tools)})"
+
+def test_turns_and_output():
+    argv = review_command("x", max_turns=7)
+    assert flag(argv, "--max-turns") == "7", "turn limit must be a string argument"
+    assert flag(argv, "--output-format") == "json"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Every element of the list must be a string, including the
+        number of turns. Tools go in one argument separated by commas.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">def review_command(prompt, max_turns=10):
+    return [
+        "claude", "--bare", "-p", prompt,
+        "--allowedTools", "Read,Grep,Glob",
+        "--max-turns", str(max_turns),
+        "--output-format", "json",
+    ]</code></pre></details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Lab: a run summariser</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Lab m01-lab1</span><span class="w-title">summarize_run.py: turn a transcript into a verdict</span></div>
+      <div class="widget-body">
+        <p>Write a command-line tool that reads a <code>stream-json</code> transcript and prints a JSON summary: turns,
+          cost, tool counts, failed calls, whether the run succeeded, and the two warnings you built detectors for
+          (unverified edits and doom loops). You'll use it on every agent you run for the rest of the course.</p>
+        <p>One constraint: the script must use only the standard library, <em>not</em> <code>fleetlab</code>. In a
+          work sandbox you may have nothing but Python, so you need to be able to read a transcript with just
+          <code>json</code>.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi run start m01-lab1
+# read labs/m01-lab1/README.md, write work/m01-lab1/summarize_run.py
+pixi run grade m01-lab1
+pixi run grade-live m01-lab1   # optional: summarise a real run of claude on shelf</code></pre>
+        <ul class="checklist" data-id="m01-lab1">
+          <li>Prints exactly the JSON keys the README specifies</li>
+          <li>Handles a run that never reached its <code>result</code> line</li>
+          <li>Counts subagent calls but reports them separately</li>
+          <li>Flags unverified edits and doom loops</li>
+          <li>Uses only the standard library</li>
+          <li><code>pixi run grade m01-lab1</code> passes</li>
+        </ul>
+        <p><strong>Stretch:</strong> add a <code>--markdown</code> flag that prints a short report you could paste
+          into a pull request.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m01-quiz">
+<script type="application/json">
+{"title": "The Harness quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What ends Claude Code's loop on its own?", "options": ["A fixed number of tool calls", "The model replies without asking for a tool (or a limit or block stops it)", "The first failed tool call", "Every 10 seconds"], "answer": 1, "explanation": "<p>The loop continues while the model asks for tools. A turn limit, a hook, or an error can also stop it.</p>"},
+  {"type": "multi", "prompt": "Which built-in tools can change files or run arbitrary commands?", "options": ["Read", "Edit", "Write", "Bash", "Grep"], "answer": [1, 2, 3], "explanation": "<p>Edit and Write change files; Bash can do anything a shell can, including editing files. Read and Grep only read.</p>"},
+  {"type": "single", "prompt": "Which rule allows <code>git diff main</code> but not <code>git diff-index HEAD</code>?", "options": ["<code>Bash(git diff*)</code>", "<code>Bash(git diff *)</code>", "<code>Bash(git *)</code>", "<code>Bash(diff)</code>"], "answer": 1, "explanation": "<p>The space before the star means \"this prefix followed by a space\", so <code>diff-index</code> doesn't match. Without the space, it would.</p>"},
+  {"type": "single", "prompt": "A command matches both an allow rule and a deny rule. What happens?", "options": ["It runs", "It's denied", "The first rule in the file wins", "Claude Code asks"], "answer": 1, "explanation": "<p>Deny rules take precedence over allow rules.</p>"},
+  {"type": "single", "prompt": "Where should a fleet's shared hooks and permission rules live?", "options": ["~/.claude/settings.json", ".claude/settings.local.json", ".claude/settings.json, committed to the repo", "In the prompt"], "answer": 2, "explanation": "<p>The committed project settings travel with the repo into every worktree and CI job. Local and user settings are personal.</p>"},
+  {"type": "single", "prompt": "Which permission mode denies anything that would otherwise prompt?", "options": ["default", "acceptEdits", "dontAsk", "bypassPermissions"], "answer": 2, "explanation": "<p><code>dontAsk</code> runs only pre-approved actions, which suits locked-down CI.</p>"},
+  {"type": "multi", "prompt": "What does <code>--bare</code> change for <code>claude -p</code>?", "options": ["Skips auto-discovered hooks, skills, subagents, MCP servers, and CLAUDE.md", "Reads ANTHROPIC_API_KEY instead of your subscription login", "Removes all tools", "Makes every run behave the same on every machine"], "answer": [0, 1, 3], "explanation": "<p>Bare mode keeps Bash, read, and edit tools, but loads nothing it wasn't told about, which makes runs reproducible.</p>"},
+  {"type": "single", "prompt": "Why is <code>--bare</code> safer in CI for pull requests?", "options": ["It is faster", "Without it, the run loads hooks and MCP servers from the repository, which a pull request could change", "It hides the transcript", "It disables the model"], "answer": 1, "explanation": "<p>A headless run without bare mode loads repository configuration without the trust prompt, so untrusted changes could alter what runs.</p>"},
+  {"type": "text", "prompt": "Which field of the final <code>result</code> event holds the number of agentic turns?", "answer": ["num_turns"], "explanation": "<p>The result event also carries <code>subtype</code>, <code>is_error</code>, <code>total_cost_usd</code>, <code>session_id</code>, and <code>result</code>.</p>"},
+  {"type": "single", "prompt": "A transcript shows three identical Bash calls in a row, each returning an error. What is this?", "options": ["Premature done", "A doom loop", "Drift", "Normal retrying"], "answer": 1, "explanation": "<p>Repeating the same failing action is a doom loop. Turn limits and error-signature checks stop it.</p>"},
+  {"type": "single", "prompt": "The result says <code>success</code>, but there's no test command after the last edit. What should you conclude?", "options": ["The fix is verified", "The agent declared success without verifying: premature done", "The tests must have run silently", "The model is broken"], "answer": 1, "explanation": "<p>The summary only says the run ended normally. The transcript shows the edit was never checked.</p>"},
+  {"type": "single", "prompt": "How do you tell a subagent's messages from the main conversation's in stream-json?", "options": ["They have type 'subagent'", "Their <code>parent_tool_use_id</code> is the id of the call that started the subagent; the main conversation has null", "They come after the result line", "They're in a separate file"], "answer": 1, "explanation": "<p>Following <code>parent_tool_use_id</code> lets you rebuild which run each message belongs to.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Claude Code runs the agent loop: gather, act, verify, repeat. The model chooses; the harness permits, runs,
+        and stops.</li>
+      <li>Read-only tools: Read, Grep, Glob. State-changing: Edit, Write, and Bash, which can do anything.</li>
+      <li>Permission modes set the baseline; allow, ask, and deny rules refine it; deny wins; <code>Bash(x *)</code>
+        is a prefix match and the space matters.</li>
+      <li>Shared rules and hooks belong in the committed <code>.claude/settings.json</code>. Managed settings beat
+        everything.</li>
+      <li>Headless: <code>claude -p</code>, explicit <code>--allowedTools</code>, <code>--max-turns</code>,
+        <code>--output-format json</code> or <code>stream-json</code>, and <code>--bare</code> for reproducible,
+        safe CI runs.</li>
+      <li>Transcripts show what summaries hide: premature done, doom loops, drift, starvation, shallow fixes.</li>
+    </ul>
+    <div class="flashcards" data-title="The harness">
+      <script type="application/json">
+      [{"front": "The three phases of the agent loop", "back": "Gather, act, verify. Then repeat or stop."},
+       {"front": "Why is Bash effectively every tool?", "back": "A shell can edit, delete, and push. A read-only agent must not have unrestricted Bash."},
+       {"front": "<code>Bash(git diff *)</code> vs <code>Bash(git diff*)</code>", "back": "With the space: <code>git diff</code> followed by a space. Without: also matches <code>git diff-index</code>."},
+       {"front": "Allow and deny both match", "back": "Deny wins."},
+       {"front": "Settings precedence for one value", "back": "Managed > command line > local > project > user. Hook lists are combined."},
+       {"front": "<code>dontAsk</code> mode", "back": "Denies anything that would prompt; only pre-approved actions run. Good for CI."},
+       {"front": "What <code>--bare</code> does", "back": "Loads nothing it isn't told about (no hooks, skills, agents, MCP, CLAUDE.md) and uses ANTHROPIC_API_KEY."},
+       {"front": "Last line of a stream-json run", "back": "<code>{\"type\": \"result\", ...}</code> with subtype, is_error, num_turns, total_cost_usd, result."},
+       {"front": "Premature done in a transcript", "back": "No test command after the last edit."},
+       {"front": "Doom loop in a transcript", "back": "The same failing call, with the same input, several times in a row."}]
+      </script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://code.claude.com/docs/en/headless">Claude Code: Run Claude Code programmatically</a></li>
+      <li><a href="https://code.claude.com/docs/en/permissions">Claude Code: Permissions</a> and <a href="https://code.claude.com/docs/en/settings">Settings</a></li>
+      <li><a href="../reference/cheatsheet.html">Agent and hook cheat sheet</a></li>
+      <li>Next: <a href="m02-writing-a-subagent.html">M02 Writing a Subagent</a>, where you define your first agent</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

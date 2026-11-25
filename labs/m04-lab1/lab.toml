@@ -1,0 +1,4 @@
+id = "m04-lab1"
+title = "A guard on risky commands"
+module = "m04"
+sample = true

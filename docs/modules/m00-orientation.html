@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M00 · How This Practicum Works · Coding Agent Fleets Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/fleetlab-src.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-agent.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m00">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Orientation · Module 00</p>
+    <h1>How This Practicum Works</h1>
+    <p class="lede">A fleet of coding agents is not one clever model. It is several narrow agents, each with its own
+      instructions, tools, and checks, passing work to each other through files a human can read. This module shows
+      you the fleet you will build, how the lessons and labs fit together, the codebase your agents will work on,
+      and the safety rules that apply from the first lab.</p>
+    <div class="lesson-meta"><span>⏱ ~1 hour</span><span>Prerequisites: Python and git basics</span></div>
+    <ul class="objectives">
+      <li>Describe a fleet of coding agents as stations, handoffs, and gates, and name the stations you will build</li>
+      <li>Explain the difference between the model and the harness, and why this course is mostly about the harness</li>
+      <li>Use <code>fleetlab</code> in a lesson cell to check an agent file and build a hook payload</li>
+      <li>Start, do, and grade a lab with Pixi, and explain why labs ship without solutions</li>
+      <li>Find your way around <code>shelf</code>, the sample project every lab uses</li>
+      <li>Apply the safety rules for running agents: sandboxes, credentials, and untrusted input</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="the-fleet">
+    <h2>The fleet you will build</h2>
+    <p>A <strong>coding agent</strong> is a language model running in a loop with tools that read and change a
+      codebase: it reads files, edits them, runs commands, and decides what to do next from what it sees. Claude
+      Code is one. GitHub Copilot's agent and Devin are others.</p>
+    <p>One agent can fix a bug. A <strong>fleet</strong> takes on the whole software development lifecycle (SDLC) by
+      splitting it into <strong>stations</strong>, each run by a narrow agent. A station has four parts:</p>
+    <ul>
+      <li><strong>A trigger</strong>: what starts it (an issue is opened, a label is added, CI fails, a schedule).</li>
+      <li><strong>An agent</strong>: instructions, a model, and only the tools that job needs.</li>
+      <li><strong>A handoff</strong>: a file the next station reads, such as labels, a spec, a branch, or a review.</li>
+      <li><strong>A gate</strong>: a check that must pass before work moves on, enforced by code or by a person.</li>
+    </ul>
+    <pre class="mermaid">
+flowchart LR
+  T[Triage] -->|labels| P[Plan]
+  P -->|spec.md| B[Build]
+  B -->|branch| R[Review]
+  B <-->|tests| X[Test]
+  R -->|approved PR| L[Release]
+  L --> O[Operate]
+  O -.->|new issues| T
+  H[Heal] -.->|fix red CI| B
+  Q[Learn] -.->|harness changes| T
+    </pre>
+    <p>By the end of Level 1 you will have written every one of these agents, the hooks that keep them honest, a
+      Python script that runs them in order, the GitHub Actions workflows that trigger them, a healer that fixes
+      red builds within strict limits, and an evaluation set that tells you whether a change to your fleet made it
+      better or worse.</p>
+    <aside class="callout think"><p>Which of those stations would you trust an agent with today, with no human
+      check at all? Keep your answer. You'll revisit it after M04, when you've seen what gates can enforce.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> a fleet is stations, handoffs, and gates. Each agent is
+      narrow, and the files between them are what make the whole thing reviewable.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="harness">
+    <h2>The model and the harness</h2>
+    <p>People say "the agent did something dumb" and blame the model. Usually the problem is somewhere else. A
+      useful way to think about it:</p>
+    <p style="text-align:center;font-size:1.2em"><strong>agent = model + harness</strong></p>
+    <p>The <strong>harness</strong> is everything except the model: the instructions it reads, the tools it can
+      call, the permissions on those tools, the checks that run on its work, and the loop that drives it. Claude
+      Code ships with a <em>builder harness</em> (its system prompt, its built-in tools, its loop). On top of that you
+      build a <em>user harness</em>: the files in your repository and your CI that shape what the agent does in your
+      codebase.</p>
+    <div class="two-col">
+      <div>
+        <h4>Builder harness (Claude Code provides)</h4>
+        <ul>
+          <li>The agent loop and context management</li>
+          <li>Built-in tools: Read, Edit, Write, Bash, Grep, Glob, Agent, ...</li>
+          <li>Permission modes and the permission system</li>
+          <li>Hook events, subagents, skills, headless mode</li>
+        </ul>
+      </div>
+      <div>
+        <h4>User harness (you write)</h4>
+        <ul>
+          <li><code>AGENTS.md</code> and <code>CLAUDE.md</code> instructions</li>
+          <li>Subagent definitions in <code>.claude/agents/</code></li>
+          <li>Skills in <code>.claude/skills/</code></li>
+          <li>Hooks and settings in <code>.claude/settings.json</code></li>
+          <li>Tests, lint rules, CI workflows, and evals</li>
+        </ul>
+      </div>
+    </div>
+    <p>This course is about the user harness. When an agent you wrote slips, the question is always the same:
+      <em>which instruction, tool limit, or check would have stopped that?</em> Then you add it. That habit has a
+      name, <strong>harness engineering</strong>, and you will practise it in every module.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> you can't change the model, but you own the harness.
+      Treat each agent mistake as a missing guide (something that steers it before it acts) or a missing sensor
+      (something that checks its work afterward).</p></aside>
+  </section>
+
+  <section class="lesson-section" id="fleetlab">
+    <h2>fleetlab: practice in the browser</h2>
+    <p>Lesson cells run real Python in your browser. They can <code>import fleetlab</code>, a small helper library
+      written for this course. It never calls a model. It does the deterministic parts of agent work that you can
+      learn and test anywhere:</p>
+    <ul>
+      <li><code>fleetlab.check_agent(text)</code> parses a subagent file and lists every problem, including fields
+        Claude Code would silently ignore.</li>
+      <li><code>fleetlab.pre_tool_use(...)</code> and <code>fleetlab.stop(...)</code> build the JSON payloads that
+        Claude Code sends to hooks; <code>fleetlab.run_hook(main, payload)</code> runs your hook code against them.</li>
+      <li><code>fleetlab.parse_stream(text)</code> reads the transcript of a headless run.</li>
+    </ul>
+    <p>Try it. This cell checks a subagent definition that has one mistake. Run it with the button or
+      <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd>, then fix the mistake and run it again.</p>
+    <div class="runnable" data-title="Check an agent file">
+<textarea>
+import fleetlab
+
+agent = """---
+name: reviewer
+description: Reviews a diff for bugs. Use after code changes.
+tools: Read, Grep, Glob
+maxturns: 20
+---
+
+You review code. You never edit files.
+"""
+
+spec = fleetlab.check_agent(agent, "reviewer.md")
+print("problems:", spec.problems or "none")
+print("can write files:", spec.can_write())
+</textarea>
+    </div>
+    <p>The field is spelled <code>maxTurns</code>. With <code>maxturns</code>, Claude Code would load the agent
+      happily and give it no turn limit at all. Nothing would warn you. That is exactly the kind of failure the
+      harness has to catch, because the model never will.</p>
+    <p>The same library runs on your machine in the labs, where the checks use it to read your files. Everything
+      it can do is listed in the <a href="../reference/fleetlab.html">fleetlab reference</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="labs">
+    <h2>Labs: build it on your machine</h2>
+    <p>Lessons teach and exercises drill. <strong>Labs</strong> are where you build the real thing: agent files,
+      hooks, settings, scripts, and workflows that Claude Code will actually load. Every lab follows the same cycle,
+      run from the root of this repository:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi install                 # once
+pixi run labs                # list labs and whether you've started them
+pixi run start m00-lab1      # copy the starter into work/m00-lab1/
+# read labs/m00-lab1/README.md, then do the work in work/m00-lab1/
+pixi run grade m00-lab1      # run the lab's checks against your work
+pixi run grade-live m02-lab1 # optional: also run checks that call the real claude CLI</code></pre>
+    <p>Grading copies your workspace to <code>build/labs/&lt;lab&gt;/</code> first, so checks can run your hooks and
+      scripts without touching your files. Read the check output like a code review: each failure says what was
+      expected and why.</p>
+    <aside class="callout warn" data-title="There are no lab solutions"><p>This is deliberate. The point of the course is
+      that <em>you</em> write the agents. Each lab's README is the specification and its checks are the acceptance
+      test. The repository's CI runs <code>pixi run check-labs</code>, which proves every untouched starter fails
+      its checks, so a green grade can't happen by accident. If you get stuck, the lesson's exercises and hints
+      cover every skill a lab needs.</p></aside>
+    <p>Most checks are deterministic: they parse your files, feed your hooks recorded payloads, and run your
+      scripts against fixture transcripts. You don't need an API key for them. <strong>Live checks</strong> are the
+      exception: with <code>grade-live</code> they run your agent with the real <code>claude</code> CLI and look at
+      what it did. They skip themselves when the CLI isn't installed.</p>
+  </section>
+
+  <section class="lesson-section" id="shelf">
+    <h2>Meet shelf, the codebase your agents work on</h2>
+    <p>Every lab gives your agents the same small project to work on: <code>shelf</code>, a command-line tool for
+      tracking books. It lives in <code>sample/</code> and each lab copies it into your workspace.</p>
+    <pre><code class="language-bash">sample/
+├── README.md
+├── shelf/
+│   ├── __main__.py      # python -m shelf
+│   ├── cli.py           # add, list, search
+│   ├── models.py        # the Book dataclass
+│   └── store.py         # load, save, search, by_year
+├── tests/               # pytest suite (all green today)
+└── issues/              # five open issues, as Markdown</code></pre>
+    <p>The tests pass, but the code is not correct. The issues describe real bugs the tests don't cover yet, a
+      reasonable feature request, a request too vague for any agent, and one issue that tries to give your agents
+      orders. You'll meet all of them again: the triager has to classify them, the builder has to fix them, and the
+      reviewer has to catch a fix that hides a bug instead of removing it.</p>
+    <aside class="callout think"><p>Open <code>sample/issues/</code> and read all five. Which would you give to an
+      agent? Which would you send back to the reporter? One of them contains instructions addressed to AI agents.
+      What should an agent do when it reads them?</p></aside>
+  </section>
+
+  <section class="lesson-section" id="safety">
+    <h2>Working safely with agents</h2>
+    <p>Coding agents run real commands with your permissions. Four rules apply from the first lab:</p>
+    <ol>
+      <li><strong>Work in a sandbox.</strong> Run agents in this repository's <code>work/</code> directory, a
+        throwaway branch, a git worktree, or a container. Never point a new agent at a repository you can't afford
+        to reset.</li>
+      <li><strong>Keep credentials out of reach.</strong> API keys live in your environment or your login, never in
+        a file the agent can read and never in a commit. Agents in this course never need production credentials.</li>
+      <li><strong>Treat everything the agent reads as untrusted input.</strong> Issue text, web pages, log files, and
+        dependency READMEs can contain instructions. That's called <em>prompt injection</em>. The defence is not a
+        better prompt; it's a harness where the agent <em>can't</em> do the dangerous thing (issue #5 asks it to push
+        to <code>main</code>, which your M04 hook will block).</li>
+      <li><strong>Least privilege by default.</strong> Give each agent the fewest tools and permissions its job
+        needs. A reviewer that can't edit files can't "helpfully" rewrite your code.</li>
+    </ol>
+    <aside class="callout danger"><p>Never run an agent with <code>--dangerously-skip-permissions</code> (bypass
+      mode) outside a disposable container or VM with no credentials and no network access you care about. In that
+      mode nothing asks before it acts.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="setup">
+    <h2>Set up your machine</h2>
+    <ol>
+      <li>Install <a href="https://pixi.sh">Pixi</a>, clone this repository, and run <code>pixi install</code>.</li>
+      <li>Run <code>pixi run serve</code> to open this site locally (the hosted copy works too).</li>
+      <li>Install Claude Code by following the official
+        <a href="https://code.claude.com/docs/en/overview">Claude Code setup guide</a>, then run <code>claude</code>
+        once and sign in. You need it for live checks and for trying your agents interactively, not for the
+        deterministic checks.</li>
+      <li>Run <code>pixi run start m00-lab1</code> and read <code>labs/m00-lab1/README.md</code>.</li>
+    </ol>
+    <aside class="callout note"><p>Headless runs in later modules use <code>--bare</code>, which skips your login and
+      reads <code>ANTHROPIC_API_KEY</code> from the environment. You'll set that up in M01. Never paste a key into a
+      lesson cell or a file in <code>work/</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Two warm-ups with <code>fleetlab</code>. They introduce the two shapes you'll handle most: agent files and
+      hook payloads.</p>
+
+    <div class="exercise" data-id="m00-e1" data-title="Fix an agent file">
+      <div class="exercise-prompt">
+        <p>The variable <code>agent</code> holds a subagent definition with three problems: a field name typo, an
+          unknown tool, and a <code>name</code> that doesn't match its file name <code>planner.md</code>. Fix the text
+          so that <code>fleetlab.check_agent(agent, "planner.md").problems</code> is empty. Keep the agent read-only:
+          it must not be able to edit files or run commands.</p>
+      </div>
+<textarea class="starter">
+agent = """---
+name: plan-writer
+description: Plans a change before code is written. Use after triage.
+tools: Read, Grep, Glob, Search
+maxturns: 25
+---
+
+You read the code and write a plan. You never edit files.
+"""
+</textarea>
+      <script type="text/x-python" class="tests">
+import fleetlab
+
+def test_no_problems():
+    problems = fleetlab.check_agent(agent, "planner.md").problems
+    assert problems == [], "still wrong: " + "; ".join(problems)
+
+def test_read_only():
+    assert not fleetlab.check_agent(agent, "planner.md").can_write(), "the planner must not get Edit, Write or Bash"
+
+def test_turn_budget_kept():
+    assert fleetlab.check_agent(agent, "planner.md").meta.get("maxTurns") == 25, "keep the 25-turn budget, spelled maxTurns"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Run <code>print(fleetlab.check_agent(agent, "planner.md").problems)</code>
+        and fix each message. Grep and Glob already cover searching; there is no <code>Search</code> tool.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">agent = """---
+name: planner
+description: Plans a change before code is written. Use after triage.
+tools: Read, Grep, Glob
+maxTurns: 25
+---
+
+You read the code and write a plan. You never edit files.
+"""</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m00-e2" data-title="Read a hook payload">
+      <div class="exercise-prompt">
+        <p>When Claude Code is about to run a shell command, it can send a hook a JSON payload like the one
+          <code>fleetlab.pre_tool_use("Bash", {"command": "git push origin main"})</code> builds. Write
+          <code>describe(payload)</code> that returns a one-line string <code>"&lt;tool&gt;: &lt;command&gt;"</code>
+          for Bash payloads (for example <code>"Bash: git push origin main"</code>) and just the tool name for any
+          other tool.</p>
+      </div>
+<textarea class="starter">
+import fleetlab
+
+def describe(payload):
+    ...
+
+print(describe(fleetlab.pre_tool_use("Bash", {"command": "git push origin main"})))
+</textarea>
+      <script type="text/x-python" class="tests">
+import fleetlab
+
+def test_bash():
+    p = fleetlab.pre_tool_use("Bash", {"command": "pytest -q"})
+    assert describe(p) == "Bash: pytest -q", "Bash payloads should give 'Bash: <command>'"
+
+def test_other_tool():
+    p = fleetlab.pre_tool_use("Edit", {"file_path": "shelf/store.py", "old_string": "a", "new_string": "b"})
+    assert describe(p) == "Edit", "other tools give just the tool name"
+
+def test_reads_fields_not_hardcoded():
+    p = fleetlab.pre_tool_use("Bash", {"command": "git status"})
+    assert describe(p) == "Bash: git status"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The tool name is <code>payload["tool_name"]</code> and its
+        arguments are in <code>payload["tool_input"]</code>. Print the payload to see every field.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">def describe(payload):
+    tool = payload["tool_name"]
+    if tool == "Bash":
+        return f"{tool}: {payload['tool_input']['command']}"
+    return tool</code></pre></details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Lab: meet shelf</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Lab m00-lab1</span><span class="w-title">Read the codebase your agents will work on</span></div>
+      <div class="widget-body">
+        <p>Before you write agents for a codebase, you need to know it well enough to judge their work. In this lab
+          you answer questions about <code>shelf</code> in <code>answers.toml</code>. The checks verify each answer
+          against the code: run the tests, find the bugs behind the issues, and decide which issues are fit for an
+          agent.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi run start m00-lab1
+# read labs/m00-lab1/README.md and edit work/m00-lab1/answers.toml
+pixi run grade m00-lab1</code></pre>
+        <ul class="checklist" data-id="m00-lab1">
+          <li>Ran the test suite and recorded the command that runs it</li>
+          <li>Found the file and function behind issues #1 and #2</li>
+          <li>Identified the issue that tries to give agents instructions</li>
+          <li>Decided which issues are ready for an agent, and why the others aren't</li>
+          <li><code>pixi run grade m00-lab1</code> passes</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m00-quiz">
+<script type="application/json">
+{"title": "Orientation quiz", "passScore": 0.7, "questions": [
+  {"type": "multi", "prompt": "Which are the four parts of a station in a fleet?", "options": ["A trigger", "An agent", "A handoff", "A gate", "A dashboard"], "answer": [0, 1, 2, 3], "explanation": "<p>A station is started by a trigger, run by a narrow agent, produces a handoff file for the next station, and is guarded by a gate. Dashboards are useful but not part of a station.</p>"},
+  {"type": "single", "prompt": "In <em>agent = model + harness</em>, what is the harness?", "options": ["The model's weights", "Everything except the model: instructions, tools, permissions, checks, and the loop", "Only the system prompt", "The CI server"], "answer": 1, "explanation": "<p>The harness is everything around the model. Claude Code provides the builder harness; you build the user harness in your repository and CI.</p>"},
+  {"type": "single", "prompt": "An agent keeps editing generated files. What is the harness-engineering response?", "options": ["Wait for a better model", "Add a guide or sensor that stops it, such as a hook that blocks edits to generated paths", "Tell the agent more firmly in chat", "Give it more tools"], "answer": 1, "explanation": "<p>Treat the slip as a missing guide or sensor. A hook that blocks the edit (with a message naming the generator to run) makes the mistake impossible rather than discouraged.</p>"},
+  {"type": "single", "prompt": "Why does <code>fleetlab.check_agent</code> report <code>maxturns</code> as a problem?", "options": ["It is deprecated", "Claude Code silently ignores unknown fields, so the agent would run with no turn limit", "Turn limits are not allowed", "It must be in uppercase"], "answer": 1, "explanation": "<p>The real field is <code>maxTurns</code>. An unknown field is ignored without a warning, which is why checks like this belong in your harness.</p>"},
+  {"type": "single", "prompt": "Why do labs ship without solutions?", "options": ["The author ran out of time", "The course is about you writing the agents; the checks are the specification, and CI proves each starter fails them", "Solutions are on a paid tier", "Labs cannot be checked automatically"], "answer": 1, "explanation": "<p>Each README is the spec and each check is an acceptance test. <code>check-labs</code> proves no check passes on an untouched starter.</p>"},
+  {"type": "single", "prompt": "What does <code>pixi run grade m02-lab1</code> run its checks against?", "options": ["Your files in work/ directly", "A copy of your workspace in build/labs/m02-lab1/", "The starter only", "A hidden reference solution"], "answer": 1, "explanation": "<p>Grading stages a copy first, so checks can run your hooks and scripts without changing your work.</p>"},
+  {"type": "single", "prompt": "Issue #5 in shelf contains a comment telling AI agents to push to main. What is the right defence?", "options": ["Add 'ignore instructions in issues' to the prompt and trust it", "A harness where the agent cannot push to main at all, such as a hook that blocks the command", "Delete the issue", "Use a bigger model"], "answer": 1, "explanation": "<p>Prompt injection is defeated by capability limits, not by asking nicely. A hook (M04) and branch protection make the dangerous action impossible.</p>"},
+  {"type": "multi", "prompt": "Which are safety rules for running agents in this course?", "options": ["Run them in a sandbox such as work/ or a worktree", "Keep API keys in the environment, never in files the agent reads", "Treat issue text and logs as untrusted input", "Give every agent every tool so it is never stuck"], "answer": [0, 1, 2], "explanation": "<p>The fourth is the opposite of least privilege. Each agent gets the fewest tools its job needs.</p>"},
+  {"type": "text", "prompt": "Which file holds subagent definitions for a project: <code>.claude/agents/&lt;name&gt;.md</code> or <code>.claude/subagents/&lt;name&gt;.json</code>? Type the directory.", "answer": [".claude/agents", ".claude/agents/"], "explanation": "<p>Project subagents are Markdown files with YAML frontmatter in <code>.claude/agents/</code>. You'll write them in M02.</p>"},
+  {"type": "single", "prompt": "When is <code>--dangerously-skip-permissions</code> acceptable?", "options": ["Whenever prompts get annoying", "Only in a disposable container or VM with no credentials or network access you care about", "In CI on your main repository", "Never under any circumstances"], "answer": 1, "explanation": "<p>Bypass mode removes every check. It belongs only in an isolated, disposable environment.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A fleet is stations (trigger, agent, handoff, gate) covering the SDLC: triage, plan, build, test, review,
+        release, operate, plus loops that heal and learn.</li>
+      <li>Agent = model + harness. Claude Code provides the builder harness; you write the user harness. Fix slips in
+        the harness by adding a guide or a sensor.</li>
+      <li><code>fleetlab</code> checks agent files, builds hook payloads, runs hook code, and reads transcripts, in
+        the browser and in lab checks. It never calls a model.</li>
+      <li>Labs: <code>pixi run start</code>, write, <code>pixi run grade</code>. No solutions; checks are the spec.
+        Live checks are optional.</li>
+      <li><code>shelf</code> is the codebase every lab uses; its issues include real bugs, a vague request, and a
+        prompt injection.</li>
+      <li>Safety: sandbox, credentials out of reach, untrusted input, least privilege.</li>
+    </ul>
+    <div class="flashcards" data-title="Orientation">
+      <script type="application/json">
+      [{"front": "A station in a fleet has four parts", "back": "Trigger, agent, handoff, gate."},
+       {"front": "agent = ?", "back": "model + harness."},
+       {"front": "Builder harness vs user harness", "back": "Builder: what Claude Code ships (loop, tools, permissions, hooks). User: what you write (AGENTS.md, agents, skills, hooks, tests, CI)."},
+       {"front": "Guide vs sensor", "back": "A guide steers the agent before it acts (instructions, tool limits). A sensor checks its work afterward (tests, hooks, review)."},
+       {"front": "Why check agent frontmatter in CI?", "back": "Claude Code silently ignores unknown fields, so a typo like <code>maxturns</code> fails quietly."},
+       {"front": "The lab cycle", "back": "<code>pixi run start &lt;lab&gt;</code> → work in <code>work/&lt;lab&gt;/</code> → <code>pixi run grade &lt;lab&gt;</code>."},
+       {"front": "Why no lab solutions?", "back": "You write the agents. Checks are the spec; CI proves every starter fails them."},
+       {"front": "Defence against prompt injection", "back": "Limit what the agent can do (hooks, permissions, branch protection), not just what it's told."},
+       {"front": "Least privilege for agents", "back": "Give each agent only the tools and permissions its job needs."}]
+      </script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://code.claude.com/docs/en/overview">Claude Code documentation</a></li>
+      <li><a href="https://martinfowler.com/articles/harness-engineering.html">Harness engineering for coding agent users</a> (Birgitta Böckeler)</li>
+      <li><a href="../reference/fleetlab.html">fleetlab reference</a> and <a href="../reference/glossary.html">glossary</a></li>
+      <li>Next: <a href="m01-the-harness.html">M01 The Harness</a>, where you look inside the loop Claude Code runs</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

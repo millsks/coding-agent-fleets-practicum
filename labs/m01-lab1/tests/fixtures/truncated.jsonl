@@ -1,0 +1,7 @@
+{"type": "system", "subtype": "init", "session_id": "truncated-1", "model": "claude-sonnet-5-5", "cwd": "/work/shelf", "tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "Agent"]}
+Waiting for background work to finish
+{"type": "assistant", "parent_tool_use_id": null, "session_id": "x", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "Read", "input": {"file_path": "shelf/models.py"}}]}}
+
+{"type": "user", "parent_tool_use_id": null, "session_id": "x", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "...", "is_error": false}]}}
+{"type": "assistant", "parent_tool_use_id": null, "session_id": "x", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_02", "name": "Bash", "input": {"command": "git push origin main"}}]}}
+{"type": "user", "parent_tool_use_id": null, "session_id": "x", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_02", "content": "Blocked: pushing to main is not allowed.", "is_error": true}]}}

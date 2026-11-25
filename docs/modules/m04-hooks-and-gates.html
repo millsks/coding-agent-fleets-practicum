@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M04 · Hooks and Gates · Coding Agent Fleets Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/fleetlab-src.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-agent.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m04">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Stage 1 · One Agent · Module 04</p>
+    <h1>Hooks and Gates</h1>
+    <p class="lede">Instructions are requests. A hook is code that Claude Code runs at a fixed point in the loop,
+      and it can stop the agent. That makes hooks the place where "never push to main" and "don't finish while the
+      tests are red" become guarantees instead of hopes. This module covers how hooks are configured, what they
+      receive, how they answer, and how to write and test the two gates every fleet needs: a guard on risky commands
+      and a gate on finishing.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m03-context-engineering.html">M03 Context Engineering</a></span></div>
+    <ul class="objectives">
+      <li>Explain why enforcement belongs in hooks, and name the hook events a fleet uses most</li>
+      <li>Configure hooks in settings with matchers, and predict which hooks run for a tool call</li>
+      <li>Read a hook's JSON payload and answer with the right exit code or JSON decision</li>
+      <li>Explain why <code>exit 1</code> does not block, and what <code>stop_hook_active</code> prevents</li>
+      <li>Write and test a PreToolUse guard that blocks risky commands without blocking normal work</li>
+      <li>Write and test a Stop gate that keeps an agent working until checks pass</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="why">
+    <h2>From requests to guarantees</h2>
+    <p>Everything you've written so far is a <em>guide</em>: it steers the model, and the model usually follows. Usually
+      isn't good enough for some rules. An agent working through a long task, reading an issue that contains
+      instructions (shelf issue #5), or simply confused, will eventually do the thing you told it not to.</p>
+    <p>A <strong>hook</strong> is a command Claude Code runs at a specific point in the agent loop: before a tool
+      runs, after it runs, when the agent tries to stop, and more. Hooks are deterministic code, they run every time
+      their event fires, and some of them can block. That makes them the <em>sensors</em> of your harness, and the
+      strongest one you have short of CI.</p>
+    <div class="two-col">
+      <div>
+        <h4>In AGENTS.md (a request)</h4>
+        <pre><code class="language-markdown">- Never push to main.
+- Run the tests before finishing.</code></pre>
+      </div>
+      <div>
+        <h4>As hooks (a guarantee)</h4>
+        <ul>
+          <li>A <code>PreToolUse</code> hook on <code>Bash</code> that blocks <code>git push … main</code></li>
+          <li>A <code>Stop</code> hook that runs the tests and refuses to let the agent finish while they fail</li>
+        </ul>
+      </div>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> keep the prose (it helps the agent plan), but enforce
+      anything that matters with a hook, and back the most important rules with CI and branch protection too.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="events">
+    <h2>Hook events</h2>
+    <p>Claude Code has many hook events. These are the ones a fleet relies on:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Event</th><th>Fires</th><th>Can block?</th><th>Fleet use</th></tr></thead>
+      <tbody>
+        <tr><td><code>PreToolUse</code></td><td>Before a tool runs</td><td>Yes: stops the call</td><td>Guard risky commands, protect paths</td></tr>
+        <tr><td><code>PostToolUse</code></td><td>After a tool succeeds</td><td>No (it already ran), but can feed back</td><td>Run a formatter, report lint errors to the agent</td></tr>
+        <tr><td><code>PostToolUseFailure</code></td><td>After a tool fails</td><td>No</td><td>Log failures, add recovery hints</td></tr>
+        <tr><td><code>UserPromptSubmit</code></td><td>When a prompt is submitted</td><td>Yes</td><td>Add context, refuse unsafe prompts</td></tr>
+        <tr><td><code>Stop</code></td><td>When the main agent tries to finish</td><td>Yes: keeps it working</td><td>The "checks must pass" gate</td></tr>
+        <tr><td><code>SubagentStop</code></td><td>When a subagent tries to finish</td><td>Yes</td><td>Per-role gates</td></tr>
+        <tr><td><code>SessionStart</code>, <code>SessionEnd</code></td><td>Session begins or ends</td><td>No</td><td>Load context, write logs</td></tr>
+        <tr><td><code>PreCompact</code></td><td>Before compaction</td><td>Yes</td><td>Save state before detail is summarised</td></tr>
+        <tr><td><code>TaskCompleted</code>, <code>TeammateIdle</code></td><td>Agent teams: a task is marked done, a teammate goes idle</td><td>Yes</td><td>Quality gates for teams (Stage 2)</td></tr>
+      </tbody>
+    </table></div>
+    <p>This module builds one <code>PreToolUse</code> gate and one <code>Stop</code> gate. The same skills carry over
+      to every other event.</p>
+  </section>
+
+  <section class="lesson-section" id="config">
+    <h2>Configuring hooks</h2>
+    <p>Hooks live in settings files under <code>"hooks"</code>, in three levels: the event, a <strong>matcher
+      group</strong> that filters when it fires, and the hook handlers to run.</p>
+    <pre><code class="language-json">{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.py\"", "timeout": 30 }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect_paths.py\"" }
+        ]
+      }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/require_green.py\"" } ] }
+    ]
+  }
+}</code></pre>
+    <h3>Matchers</h3>
+    <ul>
+      <li>Empty, <code>*</code>, or missing: every tool.</li>
+      <li>Only letters, digits, <code>_</code>, <code>-</code>, spaces, commas and <code>|</code>: exact tool names,
+        or a list such as <code>Edit|Write</code>.</li>
+      <li>Anything else: an unanchored regular expression, such as <code>^Notebook</code> or
+        <code>mcp__github__.*</code>. A bare <code>mcp__github</code> matches nothing.</li>
+    </ul>
+    <h3>Commands and where hooks live</h3>
+    <p><code>$CLAUDE_PROJECT_DIR</code> is the project root where the session started, so hook paths work whatever
+      directory the agent is in. The default timeout for a command hook is 600 seconds. Hooks can be configured in user,
+      project, local, and managed settings, in plugins, in a skill's frontmatter, and in a subagent's frontmatter
+      (where <code>Stop</code> becomes <code>SubagentStop</code>, so a gate applies only to that role). Hooks from
+      every level are combined. Run <code>/hooks</code> in a session to see what's active.</p>
+    <div class="runnable" data-title="Which hooks run for a tool call?">
+<textarea>
+import fleetlab
+
+settings = {"hooks": {
+    "PreToolUse": [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "guard_bash.py"}]},
+        {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "protect_paths.py"}]},
+        {"matcher": "mcp__github__.*", "hooks": [{"type": "command", "command": "audit_github.py"}]},
+    ]
+}}
+for tool in ["Bash", "Write", "Read", "mcp__github__create_issue", "BashOutput"]:
+    print(f"{tool:28} -> {fleetlab.hook_commands(settings, 'PreToolUse', tool)}")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="payload">
+    <h2>What a hook receives</h2>
+    <p>Claude Code starts your command and writes one JSON object to its standard input. Every event includes
+      <code>session_id</code>, <code>transcript_path</code>, <code>cwd</code>, <code>permission_mode</code>, and
+      <code>hook_event_name</code>. Then each event adds its own fields:</p>
+    <ul>
+      <li><code>PreToolUse</code> adds <code>tool_name</code>, <code>tool_input</code> (the tool's arguments: a
+        <code>command</code> for Bash, a <code>file_path</code> for Edit and Write), and <code>tool_use_id</code>.</li>
+      <li><code>Stop</code> adds <code>stop_hook_active</code> (true when the agent is already continuing because a Stop
+        hook blocked it) and the agent's <code>last_assistant_message</code>.</li>
+    </ul>
+    <div class="runnable" data-title="Look at real payload shapes">
+<textarea>
+import json, fleetlab
+
+print(json.dumps(fleetlab.pre_tool_use("Bash", {"command": "git push origin main"}), indent=2))
+print(json.dumps(fleetlab.stop(active=False), indent=2))
+</textarea>
+    </div>
+    <p>Subagent hooks also receive <code>agent_id</code> and <code>agent_type</code>, so one hook can treat roles
+      differently.</p>
+  </section>
+
+  <section class="lesson-section" id="exit-codes">
+    <h2>Answering: exit codes</h2>
+    <p>The simplest way for a hook to answer is its exit code:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Exit code</th><th>Meaning</th><th>What Claude sees</th></tr></thead>
+      <tbody>
+        <tr><td><code>0</code></td><td>Success; the action goes ahead</td><td>Nothing, unless stdout is one JSON object with a decision</td></tr>
+        <tr><td><code>2</code></td><td>Blocking error: on events that can block, the action is stopped</td><td>Your <strong>stderr</strong>, as the reason</td></tr>
+        <tr><td>anything else</td><td>Non-blocking error: the action <strong>goes ahead</strong></td><td>A note that the hook failed</td></tr>
+      </tbody>
+    </table></div>
+    <aside class="callout danger" data-title="exit 1 does not block"><p>This is the most common hook bug. Python's
+      <code>sys.exit(1)</code>, an uncaught exception, or a shell script that fails all exit with codes other than 2,
+      and Claude Code treats those as "the hook broke, carry on". A guard that crashes lets the dangerous command
+      through. Use <code>sys.exit(2)</code> to block, and test the block path.</p></aside>
+    <p>On exit 2, stderr is the message the agent reads, so write it for the agent: say what was blocked, why, and
+      what to do instead. "Blocked: force pushes are not allowed. Push to a new branch and open a pull request."
+      gives the agent a way forward. "Error" gives it nothing.</p>
+    <div class="runnable" data-title="A guard, run against two payloads">
+<textarea>
+import json, sys, fleetlab
+
+def main():
+    payload = json.load(sys.stdin)
+    command = payload.get("tool_input", {}).get("command", "")
+    if "--force" in command and "--force-with-lease" not in command:
+        print("Blocked: force pushes rewrite shared history. Push to a new branch instead.", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(0)
+
+for cmd in ["git push --force origin feat/x", "git push origin feat/x"]:
+    result = fleetlab.run_hook(main, fleetlab.pre_tool_use("Bash", {"command": cmd}))
+    print(f"{cmd:34} exit={result.exit_code} blocked={result.blocked} reason={result.reason!r}")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="json-decisions">
+    <h2>Answering: JSON decisions</h2>
+    <p>For more control, exit 0 and print exactly one JSON object to stdout (nothing else around it). For
+      <code>PreToolUse</code>, the decision goes under <code>hookSpecificOutput</code>:</p>
+    <pre><code class="language-json">{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Pushing to main is not allowed. Open a pull request."
+  }
+}</code></pre>
+    <p><code>permissionDecision</code> can be <code>allow</code> (skip the permission prompt), <code>deny</code>,
+      <code>ask</code> (show the user a prompt), or <code>defer</code>. A PreToolUse hook can also return
+      <code>updatedInput</code> to change the tool's arguments before it runs, and <code>additionalContext</code> to
+      tell Claude something.</p>
+    <p>For <code>Stop</code>, the shape is simpler:</p>
+    <pre><code class="language-json">{ "decision": "block", "reason": "3 tests are failing: fix them before finishing." }</code></pre>
+    <p>Which to use? Exit 2 with a stderr message is the simplest and works on every blocking event. Use JSON when
+      you need <code>ask</code>, <code>allow</code>, or <code>updatedInput</code>. Remember that exit 2 blocks even if
+      your JSON said allow, and that stdout is only read as a decision when it's a single JSON object.</p>
+    <aside class="callout note"><p>Other tools speak different hook dialects. GitHub Copilot's hooks, for example,
+      receive <code>toolName</code> and <code>toolArgs</code> and answer with <code>permissionDecision</code> JSON.
+      If your fleet must run under several tools, keep the decision logic in one function and add a thin adapter per
+      tool's format.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="guard">
+    <h2>Gate 1: a guard on risky commands</h2>
+    <p>A <code>PreToolUse</code> guard on <code>Bash</code> blocks commands that should never run without a human:
+      rewriting shared history, pushing to the default branch, skipping git hooks, deleting outside the workspace,
+      running scripts straight from the internet. Writing a good one is about balancing two kinds of error:</p>
+    <ul>
+      <li><strong>False negatives</strong> (a dangerous command gets through) are what you're preventing. Check the
+        whole command string, not just its start: <code>cd repo &amp;&amp; git push --force</code> must be caught.</li>
+      <li><strong>False positives</strong> (normal work is blocked) are what makes people turn guards off. Pushing a
+        feature branch, <code>--force-with-lease</code> on your own branch, and <code>rm -rf build/</code> must pass.</li>
+    </ul>
+    <p>Keep the rules as a list of (pattern, explanation) pairs, so the message for each block says exactly why. And
+      test the guard like any other code, with a table of commands that must be blocked and commands that must be
+      allowed. That table <em>is</em> the guard's specification.</p>
+    <aside class="callout warn"><p>A text-matching guard is a strong safety net, not a sandbox: an agent determined to
+      work around it can write a Python script that does the same thing. Back the most important rules with
+      something outside the agent's reach: branch protection on the server, credentials that can't push to
+      <code>main</code>, a container without production access.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="stop-gate">
+    <h2>Gate 2: don't finish while checks fail</h2>
+    <p>The <code>Stop</code> gate fixes the "premature done" failure from M01. When the agent tries to finish, the
+      hook runs the project's fast checks. If they pass, it exits 0 and the agent stops. If they fail, it exits 2 with
+      the end of the failure output on stderr, and Claude reads that as its next piece of work.</p>
+    <pre class="mermaid">
+flowchart TD
+  S[Agent tries to stop] --> A{stop_hook_active?}
+  A -->|yes| OK[exit 0: let it stop]
+  A -->|no| R[Run fast checks]
+  R -->|pass| OK
+  R -->|fail| B[exit 2 + tail of output on stderr]
+  B --> W[Agent keeps working]
+  W --> S
+    </pre>
+    <p>Three details make the difference between a gate and a trap:</p>
+    <ul>
+      <li><strong><code>stop_hook_active</code>.</strong> When it's true, the agent is already continuing because of
+        a Stop hook. If you block again, and the checks can't be fixed, the agent never stops. Let it go on the second
+        attempt and let the orchestrator (Stage 2) treat the run as failed. That's the loop's exit.</li>
+      <li><strong>The tail, not the whole log.</strong> Send the last 40 lines or so: that's where the failure summary
+        is. A 2,000-line log fills the agent's context with noise.</li>
+      <li><strong>A timeout.</strong> A hanging test suite would hang the agent. Run the checks with a timeout and
+        block with a clear message if it's exceeded.</li>
+    </ul>
+    <p>The checks themselves should be <em>fast</em>: this hook runs every time the agent tries to finish. A two-minute
+      suite of unit tests is ideal; the full suite belongs in CI.</p>
+  </section>
+
+  <section class="lesson-section" id="testing">
+    <h2>Testing hooks, and keeping them safe</h2>
+    <p>Hooks are code that runs with your permissions on every matching event, so treat them like production code:</p>
+    <ul>
+      <li><strong>Test with recorded payloads.</strong> Build payloads with <code>fleetlab.pre_tool_use</code> and
+        <code>fleetlab.stop</code>, or save real ones from a session, and assert on exit codes and messages. Test the
+        allow path as well as the block path.</li>
+      <li><strong>Keep them fast.</strong> A PreToolUse hook runs before <em>every</em> matching tool call.</li>
+      <li><strong>Protect the hooks themselves.</strong> An agent that can edit <code>.claude/settings.json</code> or
+        your hook scripts can switch its own gates off. Add them to your protected paths.</li>
+      <li><strong>Know when repository hooks run.</strong> A headless <code>claude -p</code> run executes the hooks in
+        a repository's <code>.claude/settings.json</code> without a trust prompt. In CI on untrusted pull requests, use
+        <code>--bare</code> and pass the settings you trust with <code>--settings</code>.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Five exercises, each run with <code>fleetlab.run_hook</code>: your <code>main()</code> reads
+      <code>sys.stdin</code> and calls <code>sys.exit</code> exactly as a real hook script does.</p>
+
+    <div class="exercise" data-id="m04-e1" data-title="Block a destructive delete">
+      <div class="exercise-prompt">
+        <p>Write <code>main()</code> for a <code>PreToolUse</code> hook that exits 2 with a message on stderr when a
+          Bash command contains <code>rm -rf /</code> or <code>rm -rf ~</code> (followed by a space or the end of the
+          command), and exits 0 otherwise, including for non-Bash tools.</p>
+      </div>
+<textarea class="starter">
+import json, re, sys
+
+def main():
+    payload = json.load(sys.stdin)
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import fleetlab
+
+def run(tool, **tool_input):
+    return fleetlab.run_hook(main, fleetlab.pre_tool_use(tool, tool_input))
+
+def test_blocks_root_and_home():
+    for cmd in ["rm -rf /", "rm -rf ~", "cd x && rm -rf / ", "rm -rf ~ --verbose"]:
+        r = run("Bash", command=cmd)
+        assert r.exit_code == 2, f"should block {cmd!r} with exit 2, got {r.exit_code}"
+        assert r.stderr.strip(), "explain the block on stderr"
+
+def test_allows_workspace_deletes():
+    for cmd in ["rm -rf build", "rm -rf ./dist", "rm -rf /tmp/scratch"]:
+        assert run("Bash", command=cmd).exit_code == 0, f"{cmd!r} is a normal delete"
+
+def test_other_tools():
+    assert run("Read", file_path="/etc/hosts").exit_code == 0
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>re.search(r"rm\s+-rf\s+(/|~)(\s|$)", command)</code>
+        matches the dangerous forms but not <code>/tmp/scratch</code>, because <code>/</code> must be followed by a
+        space or the end.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">import json, re, sys
+
+def main():
+    payload = json.load(sys.stdin)
+    if payload.get("tool_name") != "Bash":
+        sys.exit(0)
+    command = payload.get("tool_input", {}).get("command", "")
+    if re.search(r"rm\s+-rf\s+(/|~)(\s|$)", command):
+        print("Blocked: recursive delete of / or your home directory.", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(0)</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m04-e2" data-title="Protect paths">
+      <div class="exercise-prompt">
+        <p>Write <code>main()</code> for a hook matched to <code>Edit|Write</code>. Block (exit 2, message on stderr)
+          when <code>tool_input["file_path"]</code>, made relative to the payload's <code>cwd</code> if it's inside it,
+          matches any glob in <code>PROTECTED</code> using <code>fnmatch</code>. Allow everything else.</p>
+      </div>
+<textarea class="starter">
+import fnmatch, json, sys
+
+PROTECTED = [".github/workflows/*", ".claude/*", ".env", "tests/*"]
+
+def main():
+    payload = json.load(sys.stdin)
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import fleetlab
+
+def run(path):
+    return fleetlab.run_hook(main, fleetlab.pre_tool_use("Edit", {"file_path": path}, cwd="/home/dev/shelf"))
+
+def test_relative_and_absolute():
+    assert run(".env").exit_code == 2
+    assert run("/home/dev/shelf/.github/workflows/ci.yml").exit_code == 2, "make absolute paths relative to cwd first"
+
+def test_protects_hooks_and_tests():
+    assert run("/home/dev/shelf/.claude/settings.json").exit_code == 2, "agents must not switch off their own gates"
+    assert run("tests/test_store.py").exit_code == 2
+
+def test_allows_code():
+    r = run("/home/dev/shelf/shelf/store.py")
+    assert r.exit_code == 0, f"shelf/store.py is not protected (stderr: {r.stderr})"
+
+def test_message():
+    assert ".env" in run(".env").stderr, "name the blocked path in the message"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>If <code>path.startswith(cwd + "/")</code>, slice it off. Then
+        <code>any(fnmatch.fnmatch(rel, p) for p in PROTECTED)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">import fnmatch, json, sys
+
+PROTECTED = [".github/workflows/*", ".claude/*", ".env", "tests/*"]
+
+def main():
+    payload = json.load(sys.stdin)
+    path = payload.get("tool_input", {}).get("file_path", "")
+    cwd = payload.get("cwd", "")
+    rel = path[len(cwd) + 1:] if cwd and path.startswith(cwd + "/") else path
+    for pattern in PROTECTED:
+        if fnmatch.fnmatch(rel, pattern):
+            print(f"Blocked: {rel} is protected ({pattern}). Explain the needed change in your summary instead.", file=sys.stderr)
+            sys.exit(2)
+    sys.exit(0)</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m04-e3" data-title="Deny with JSON">
+      <div class="exercise-prompt">
+        <p>Write <code>main()</code> that denies <code>git push</code> commands targeting <code>main</code> or
+          <code>master</code> by exiting 0 and printing a single JSON object with
+          <code>hookSpecificOutput.permissionDecision = "deny"</code> and a reason. For every other command print
+          nothing and exit 0.</p>
+      </div>
+<textarea class="starter">
+import json, re, sys
+
+def main():
+    payload = json.load(sys.stdin)
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import json, fleetlab
+
+def run(cmd):
+    return fleetlab.run_hook(main, fleetlab.pre_tool_use("Bash", {"command": cmd}))
+
+def test_denies_main():
+    for cmd in ["git push origin main", "git push origin HEAD:master", "git push -u origin main"]:
+        r = run(cmd)
+        assert r.exit_code == 0, "use JSON, not exit 2, in this exercise"
+        assert r.decision == "deny", f"{cmd!r} should be denied (stdout was {r.stdout!r})"
+        assert r.reason, "include permissionDecisionReason"
+        assert r.json["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+
+def test_allows_feature_branch():
+    r = run("git push -u origin feat/main-menu")
+    assert r.exit_code == 0 and r.decision is None and r.stdout.strip() == "", "feature branches named like main-menu are fine"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Match <code>main</code> or <code>master</code> as a whole word not
+        followed by <code>-</code>: <code>re.search(r"\bgit\s+push\b.*\s(HEAD:)?(main|master)\b(?!-)", cmd)</code>.
+        Print with <code>print(json.dumps(...))</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">import json, re, sys
+
+def main():
+    payload = json.load(sys.stdin)
+    cmd = payload.get("tool_input", {}).get("command", "")
+    if re.search(r"\bgit\s+push\b.*\s(HEAD:)?(main|master)\b(?!-)", cmd):
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "Pushing to the default branch is not allowed. Push a branch and open a pull request.",
+        }}))
+    sys.exit(0)</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m04-e4" data-title="A Stop gate">
+      <div class="exercise-prompt">
+        <p>Write <code>make_stop_hook(run_checks)</code>. <code>run_checks()</code> returns <code>(exit_code,
+          output)</code> from the project's fast checks. Return a <code>main()</code> that:</p>
+        <ul>
+          <li>exits 0 immediately if the payload's <code>stop_hook_active</code> is true (without running checks);</li>
+          <li>exits 0 if the checks pass;</li>
+          <li>otherwise prints <code>Checks failed</code> and the <strong>last 5 lines</strong> of the output to stderr,
+            and exits 2.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+import json, sys
+
+def make_stop_hook(run_checks):
+    def main():
+        ...
+    return main
+</textarea>
+      <script type="text/x-python" class="tests">
+import fleetlab
+
+LOG = "\n".join(f"line {i}" for i in range(1, 21))
+
+def test_passes():
+    r = fleetlab.run_hook(make_stop_hook(lambda: (0, "ok")), fleetlab.stop())
+    assert r.exit_code == 0
+
+def test_blocks_with_tail():
+    r = fleetlab.run_hook(make_stop_hook(lambda: (1, LOG)), fleetlab.stop())
+    assert r.exit_code == 2, "failing checks must block with exit 2"
+    assert "Checks failed" in r.stderr
+    assert "line 20" in r.stderr and "line 16" in r.stderr, "include the last 5 lines"
+    assert "line 15" not in r.stderr, "only the last 5 lines, not the whole log"
+
+def test_lets_go_when_active():
+    calls = []
+    def checks():
+        calls.append(1)
+        return (1, "still failing")
+    r = fleetlab.run_hook(make_stop_hook(checks), fleetlab.stop(active=True))
+    assert r.exit_code == 0, "when stop_hook_active is true, let the agent stop"
+    assert calls == [], "don't even run the checks the second time"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Read the payload first and check
+        <code>payload.get("stop_hook_active")</code>. Use <code>output.splitlines()[-5:]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">import json, sys
+
+def make_stop_hook(run_checks):
+    def main():
+        payload = json.load(sys.stdin)
+        if payload.get("stop_hook_active"):
+            sys.exit(0)
+        code, output = run_checks()
+        if code == 0:
+            sys.exit(0)
+        print("Checks failed. Fix them before finishing:", file=sys.stderr)
+        print("\n".join(output.splitlines()[-5:]), file=sys.stderr)
+        sys.exit(2)
+    return main</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m04-e5" data-title="Wire it up">
+      <div class="exercise-prompt">
+        <p>Set <code>settings</code> to a settings dictionary that runs <code>guard_bash.py</code> before every Bash
+          call, <code>protect_paths.py</code> before every Edit and Write call (one matcher group for both), and
+          <code>require_green.py</code> when the agent stops. Use <code>"type": "command"</code> and commands of the
+          form <code>python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/&lt;file&gt;"</code>.</p>
+      </div>
+<textarea class="starter">
+settings = {
+    "hooks": {
+    }
+}
+</textarea>
+      <script type="text/x-python" class="tests">
+import fleetlab
+
+def names(event, tool=None):
+    return [c.rsplit("/", 1)[-1].strip('"') for c in fleetlab.hook_commands(settings, event, tool)]
+
+def test_bash():
+    assert names("PreToolUse", "Bash") == ["guard_bash.py"], "only the guard runs for Bash"
+
+def test_edit_and_write():
+    assert names("PreToolUse", "Edit") == ["protect_paths.py"]
+    assert names("PreToolUse", "Write") == ["protect_paths.py"]
+
+def test_read_is_ungated():
+    assert names("PreToolUse", "Read") == [], "Read needs no gate"
+
+def test_stop():
+    assert names("Stop") == ["require_green.py"]
+
+def test_one_group_for_edit_and_write():
+    groups = settings["hooks"]["PreToolUse"]
+    assert len(groups) == 2, "use one matcher group for Edit and Write (Edit|Write)"
+
+def test_project_dir():
+    for c in fleetlab.hook_commands(settings, "Stop"):
+        assert "$CLAUDE_PROJECT_DIR" in c, "use $CLAUDE_PROJECT_DIR so the path works from any directory"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Copy the shape from "Configuring hooks". The Stop group needs no
+        matcher.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">def hook(name):
+    return {"type": "command", "command": f'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/{name}"'}
+
+settings = {
+    "hooks": {
+        "PreToolUse": [
+            {"matcher": "Bash", "hooks": [hook("guard_bash.py")]},
+            {"matcher": "Edit|Write", "hooks": [hook("protect_paths.py")]},
+        ],
+        "Stop": [{"hooks": [hook("require_green.py")]}],
+    }
+}</code></pre></details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Labs: shelf's two gates</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Lab m04-lab1</span><span class="w-title">guard_bash.py: block risky commands</span></div>
+      <div class="widget-body">
+        <p>Write a PreToolUse guard for shelf and wire it into <code>.claude/settings.json</code>. The checks run your
+          script as a real subprocess against a table of commands that must be blocked (force pushes, pushes to the
+          default branch, skipping hooks, deleting outside the workspace, piping downloads into a shell) and commands
+          that must be allowed (normal pushes, <code>--force-with-lease</code>, cleaning build output, running
+          tests).</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi run start m04-lab1
+pixi run grade m04-lab1</code></pre>
+        <ul class="checklist" data-id="m04-lab1">
+          <li>Every dangerous command in the README's table is blocked with exit 2 and a helpful message</li>
+          <li>Every normal command is allowed</li>
+          <li>Chained commands such as <code>cd x &amp;&amp; git push --force</code> are caught</li>
+          <li>The settings wire the guard to Bash only</li>
+          <li>Tried issue #5's instructions in a live session and watched the guard block the push</li>
+        </ul>
+      </div>
+    </div>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Lab m04-lab2</span><span class="w-title">require_green.py: checks must pass before stopping</span></div>
+      <div class="widget-body">
+        <p>Write the Stop gate. It reads the check command from <code>.claude/check-command</code>, runs it with a
+          timeout, and blocks with the tail of the output when it fails. The checks run your hook in copies of shelf
+          with passing and failing tests, with and without <code>stop_hook_active</code>, and with a check that hangs.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi run start m04-lab2
+pixi run grade m04-lab2</code></pre>
+        <ul class="checklist" data-id="m04-lab2">
+          <li>Passing checks let the agent stop; failing checks block with the last lines of output</li>
+          <li><code>stop_hook_active</code> always lets the agent stop</li>
+          <li>A hanging check is stopped by the timeout and reported</li>
+          <li>The settings wire the gate to Stop, and <code>.claude/check-command</code> runs shelf's tests</li>
+          <li>Asked an agent to fix issue #2 and watched the gate send it back when its first attempt failed</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m04-quiz">
+<script type="application/json">
+{"title": "Hooks and Gates quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why enforce \"never push to main\" with a hook instead of only AGENTS.md?", "options": ["Hooks are cheaper", "A hook is code that runs every time and can block; prose is a request the model may not follow", "AGENTS.md cannot mention git", "Hooks make the model smarter"], "answer": 1, "explanation": "<p>Guides steer; sensors enforce. Keep the prose, but make the rule a guarantee.</p>"},
+  {"type": "single", "prompt": "Your guard script raises an uncaught exception on a force push. What happens?", "options": ["The push is blocked", "The push goes ahead: a crash exits with a code other than 2, which is a non-blocking error", "Claude Code asks the user", "The session ends"], "answer": 1, "explanation": "<p>Only exit 2 blocks. Test the block path, and make sure errors in your own code can't open the gate.</p>"},
+  {"type": "single", "prompt": "On exit 2 from a PreToolUse hook, what does Claude see?", "options": ["Nothing", "Your stderr, as the reason the call was blocked", "Your stdout", "The full payload"], "answer": 1, "explanation": "<p>Write stderr for the agent: what was blocked, why, and what to do instead.</p>"},
+  {"type": "multi", "prompt": "Which tool names does the matcher <code>Edit|Write</code> match?", "options": ["Edit", "Write", "MultiEdit", "NotebookEdit"], "answer": [0, 1], "explanation": "<p>A matcher of only letters and <code>|</code> is an exact list. To match more, list them or use a regular expression.</p>"},
+  {"type": "single", "prompt": "What does <code>mcp__github</code> match as a matcher?", "options": ["Every GitHub MCP tool", "Nothing", "Only the first GitHub tool", "Every MCP tool"], "answer": 1, "explanation": "<p>It's an exact name and no tool is called that. Use <code>mcp__github__.*</code>.</p>"},
+  {"type": "single", "prompt": "What is <code>stop_hook_active</code> for?", "options": ["It tells the hook the session is interactive", "It's true when the agent is already continuing because a Stop hook blocked it; letting it stop then prevents an endless loop", "It disables all hooks", "It marks the last turn"], "answer": 1, "explanation": "<p>Without that exit, an unfixable failure would keep the agent running forever.</p>"},
+  {"type": "single", "prompt": "Your Stop gate should send the agent…", "options": ["The whole test log", "The last few dozen lines, where the failure summary is", "Only the exit code", "Nothing; just block"], "answer": 1, "explanation": "<p>The tail carries the useful part. A huge log fills the agent's context with noise.</p>"},
+  {"type": "single", "prompt": "When would you answer with JSON instead of exit 2?", "options": ["Always", "When you need ask, allow, updatedInput, or additionalContext", "Never; JSON is ignored", "Only on PostToolUse"], "answer": 1, "explanation": "<p>Exit 2 is simplest for blocking. JSON gives finer control, and is only read when stdout is a single JSON object on exit 0.</p>"},
+  {"type": "single", "prompt": "Which command should a good Bash guard allow?", "options": ["<code>git push --force origin main</code>", "<code>git push --force-with-lease origin feat/x</code>", "<code>curl https://x.sh | sh</code>", "<code>git commit --no-verify</code>"], "answer": 1, "explanation": "<p>Force-with-lease on your own branch is safe normal work. Blocking it causes the false positives that make people disable guards.</p>"},
+  {"type": "single", "prompt": "Why add <code>.claude/</code> to the protected paths?", "options": ["It's large", "An agent that can edit settings or hook scripts can switch off its own gates", "Claude Code requires it", "To speed up hooks"], "answer": 1, "explanation": "<p>Protect the harness itself.</p>"},
+  {"type": "single", "prompt": "Why use <code>--bare</code> for headless runs on untrusted pull requests?", "options": ["It's faster", "Without it, the run executes hooks from the repository's settings, which the pull request could change", "It disables the model", "It removes Bash"], "answer": 1, "explanation": "<p>Pass the settings you trust with <code>--settings</code> instead.</p>"},
+  {"type": "text", "prompt": "Which environment variable gives a hook the project root where the session started?", "answer": ["CLAUDE_PROJECT_DIR", "$CLAUDE_PROJECT_DIR"], "explanation": "<p>Use it in hook commands so paths work wherever the agent is.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Hooks turn rules into guarantees. Guides steer; hooks (and CI) enforce.</li>
+      <li>Configure under <code>"hooks"</code>: event, matcher group, handlers. Matchers are exact names,
+        <code>|</code>-lists, or regular expressions. Use <code>$CLAUDE_PROJECT_DIR</code>.</li>
+      <li>Payload on stdin: common fields plus <code>tool_name</code>/<code>tool_input</code> for PreToolUse and
+        <code>stop_hook_active</code> for Stop.</li>
+      <li>Exit 0 continues, exit 2 blocks with stderr as the reason, anything else is a non-blocking error.
+        <code>exit 1</code> does not block.</li>
+      <li>JSON: <code>hookSpecificOutput.permissionDecision</code> for PreToolUse; <code>{"decision": "block"}</code>
+        for Stop.</li>
+      <li>Guards balance false negatives and false positives; test both from a table. Stop gates honour
+        <code>stop_hook_active</code>, send the tail, and use a timeout.</li>
+      <li>Test hooks with recorded payloads, keep them fast, protect them, and use <code>--bare</code> on untrusted
+        input.</li>
+    </ul>
+    <div class="flashcards" data-title="Hooks and gates">
+      <script type="application/json">
+      [{"front": "Exit 0 / 2 / other", "back": "Continue / block (stderr to Claude) / non-blocking error (action goes ahead)."},
+       {"front": "Does <code>exit 1</code> block?", "back": "No. Only exit 2 blocks."},
+       {"front": "PreToolUse payload fields", "back": "Common fields plus <code>tool_name</code>, <code>tool_input</code>, <code>tool_use_id</code>."},
+       {"front": "Stop payload field that prevents loops", "back": "<code>stop_hook_active</code>: let the agent stop when it's true."},
+       {"front": "PreToolUse JSON decision", "back": "<code>{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"…\"}}</code>"},
+       {"front": "Stop JSON decision", "back": "<code>{\"decision\": \"block\", \"reason\": \"…\"}</code>"},
+       {"front": "Matcher <code>Edit|Write</code>", "back": "Exactly Edit or Write. Regex only when other characters appear."},
+       {"front": "Path in hook commands", "back": "<code>$CLAUDE_PROJECT_DIR</code>."},
+       {"front": "Hooks in subagent frontmatter", "back": "Run only while that subagent is active; <code>Stop</code> becomes <code>SubagentStop</code>."},
+       {"front": "Two errors a guard balances", "back": "False negatives (danger gets through) and false positives (normal work blocked)."},
+       {"front": "Untrusted PRs and repo hooks", "back": "Use <code>--bare</code> and pass trusted settings with <code>--settings</code>."}]
+      </script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://code.claude.com/docs/en/hooks">Claude Code: Hooks reference</a> and <a href="https://code.claude.com/docs/en/hooks-guide">hooks guide</a></li>
+      <li><a href="../reference/cheatsheet.html">Agent and hook cheat sheet</a></li>
+      <li>Next: Stage 2 on the <a href="../reference/roadmap.html">roadmap</a>, where your agents start handing work to each other</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

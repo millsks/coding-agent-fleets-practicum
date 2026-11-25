@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M02 · Writing a Subagent · Coding Agent Fleets Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/fleetlab-src.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-agent.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m02">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Stage 1 · One Agent · Module 02</p>
+    <h1>Writing a Subagent</h1>
+    <p class="lede">Every station in your fleet is a subagent: a Markdown file that gives Claude a role, a prompt,
+      a set of tools, and limits. This module covers every part of that file and, more importantly, how to write
+      each part well: a description that makes delegation happen at the right moment, a prompt with a clear output
+      and a clear point to stop, and tools that let the agent do its job and nothing else. You'll finish by writing
+      the reviewer and test-writer your fleet will use from here on.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m01-the-harness.html">M01 The Harness</a></span></div>
+    <ul class="objectives">
+      <li>Explain what a subagent gives you (its own context, tools, and prompt) and what it costs</li>
+      <li>Write a subagent file in the right place, and predict which definition wins when names collide</li>
+      <li>Use the frontmatter fields deliberately: tools, disallowedTools, model, maxTurns, isolation, and others</li>
+      <li>Write descriptions that trigger delegation for the right tasks and not the wrong ones</li>
+      <li>Write prompts with a role, a scope, a process, an output format, and stop conditions</li>
+      <li>Choose least-privilege tools for a role, and test an agent against a seeded change</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="why">
+    <h2>What a subagent is for</h2>
+    <p>A <strong>subagent</strong> is a separate agent that the main conversation (or a script) can hand a task to.
+      It runs with:</p>
+    <ul>
+      <li><strong>Its own context window.</strong> It starts fresh with its own prompt and only what it's given. The
+        hundreds of lines it reads while working never land in the caller's context. Only its final answer comes
+        back.</li>
+      <li><strong>Its own prompt.</strong> The body of the file becomes its system instructions: a role and rules
+        that don't have to compete with everything else the main session knows.</li>
+      <li><strong>Its own tools and limits.</strong> A reviewer can be read-only even when the main session can edit
+        files.</li>
+    </ul>
+    <p>Those three properties are why a fleet is built from subagents. Isolation keeps each station's context
+      small and focused. A separate prompt makes behaviour consistent. Separate tools enforce least privilege. And a
+      fresh context is what makes a reviewer useful: an agent that didn't write the code doesn't share the author's
+      blind spots.</p>
+    <p>The cost is that a subagent only returns a summary. If the caller needs every detail of what the subagent
+      saw, it either has to ask for that detail in the output format or do the work itself. Subagents also start
+      cold: each one re-reads what it needs, which costs tokens and time.</p>
+    <p>Claude Code includes some built-in subagents, notably <strong>Explore</strong> (fast, read-only searching),
+      <strong>Plan</strong> (research before planning), and <strong>general-purpose</strong>. Yours sit alongside
+      them.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> use a subagent when a task is focused, its result can be
+      summarised, and it benefits from a fresh context or tighter tools. Keep work in one session when the caller
+      needs every detail.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="anatomy">
+    <h2>Anatomy of a subagent file</h2>
+    <p>A subagent is a Markdown file with YAML frontmatter. Only <code>name</code> and <code>description</code> are
+      required. Everything after the closing <code>---</code> is the subagent's system prompt.</p>
+    <pre><code class="language-markdown">---
+name: reviewer
+description: Reviews the current branch for bugs, security issues and scope creep. Use after code changes, before opening a pull request.
+tools: Read, Grep, Glob, Bash
+disallowedTools: Edit, Write
+model: sonnet
+maxTurns: 25
+---
+
+You review code. You never edit files.
+...</code></pre>
+    <h3>Where it lives, and which definition wins</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>Location</th><th>Scope</th></tr></thead>
+      <tbody>
+        <tr><td>Managed settings directory</td><td>Set by an organization; wins over project and user definitions with the same name</td></tr>
+        <tr><td><code>--agents '{...}'</code> on the command line</td><td>One session; highest priority among the ones you control, and not saved to disk</td></tr>
+        <tr><td><code>.claude/agents/</code></td><td>This project; commit it so the whole team and CI get the same agents</td></tr>
+        <tr><td><code>~/.claude/agents/</code></td><td>You, in every project</td></tr>
+        <tr><td>A plugin's <code>agents/</code></td><td>Wherever the plugin is enabled</td></tr>
+      </tbody>
+    </table></div>
+    <p>Claude Code scans the agent folders recursively, so you can organise definitions in subfolders like
+      <code>agents/review/</code>. When two definitions share a name, the higher-priority location wins. That's how
+      you'd override a personal reviewer with the team's project reviewer, and how an administrator can pin one for
+      everyone.</p>
+    <aside class="callout note"><p>Claude Code ignores frontmatter fields it doesn't recognise, without warning. A
+      misspelled field simply isn't applied. That's why every lab check (and the validator you'll put in your own CI)
+      parses agent files with <code>fleetlab.check_agent</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="fields">
+    <h2>The fields, and when to use each</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Field</th><th>What it does</th><th>Guidance</th></tr></thead>
+      <tbody>
+        <tr><td><code>name</code></td><td>Unique id (no <code>:</code>, up to 256 characters)</td><td>Lowercase with hyphens; match the file name</td></tr>
+        <tr><td><code>description</code></td><td>When Claude should delegate to it</td><td>The most important line you write. See the next section</td></tr>
+        <tr><td><code>tools</code></td><td>Allowlist of tools; omitted means it inherits the caller's</td><td>Always set it. Inheriting is the opposite of least privilege</td></tr>
+        <tr><td><code>disallowedTools</code></td><td>Removed from the inherited or listed tools</td><td>A second lock: list Edit and Write on agents that must never edit</td></tr>
+        <tr><td><code>model</code></td><td><code>sonnet</code>, <code>opus</code>, <code>haiku</code>, <code>fable</code>, a full model id, or <code>inherit</code></td><td>Small models for high-volume routine work, the strongest for planning and review</td></tr>
+        <tr><td><code>maxTurns</code></td><td>Turns before it stops and returns partial output</td><td>Every agent gets a budget. A runaway agent costs money</td></tr>
+        <tr><td><code>permissionMode</code></td><td><code>default</code>, <code>acceptEdits</code>, <code>plan</code>, <code>auto</code>, <code>dontAsk</code>, <code>bypassPermissions</code></td><td><code>plan</code> for agents that only propose</td></tr>
+        <tr><td><code>isolation</code></td><td><code>worktree</code> runs it in a temporary git worktree</td><td>For agents that edit, so parallel builders never share files</td></tr>
+        <tr><td><code>effort</code></td><td><code>low</code> to <code>max</code></td><td>Higher for hard reasoning, lower for quick classification</td></tr>
+        <tr><td><code>skills</code></td><td>Skills preloaded into its context</td><td>A procedure the agent always needs (M03)</td></tr>
+        <tr><td><code>mcpServers</code></td><td>MCP servers available to it</td><td>Scope external tools to the one agent that needs them</td></tr>
+        <tr><td><code>hooks</code></td><td>Hooks that run only while it's active</td><td>A gate specific to this role (M04)</td></tr>
+        <tr><td><code>memory</code></td><td>Persistent notes: <code>user</code>, <code>project</code>, or <code>local</code></td><td>Useful for a reviewer that learns conventions. Review what it writes</td></tr>
+        <tr><td><code>background</code></td><td><code>true</code> keeps it running in the background</td><td>Long, independent work</td></tr>
+        <tr><td><code>omitClaudeMd</code></td><td><code>true</code> skips CLAUDE.md files at startup</td><td>Agents that don't need project instructions</td></tr>
+        <tr><td><code>autoCompactWindow</code>, <code>initialPrompt</code>, <code>color</code></td><td>Compaction threshold, first prompt as main agent, display colour</td><td>Rarely needed</td></tr>
+      </tbody>
+    </table></div>
+    <p>Subagents can start their own subagents (by default up to three levels below the main conversation). To stop a
+      specific agent from delegating, leave <code>Agent</code> out of its <code>tools</code>. That's the right
+      default for most stations: a reviewer that spawns more reviewers is hard to reason about.</p>
+  </section>
+
+  <section class="lesson-section" id="description">
+    <h2>Descriptions that trigger delegation</h2>
+    <p>When you ask the main session to do something, Claude decides whether to hand it to a subagent by reading the
+      <strong>descriptions</strong> of all available subagents. The description is a routing rule written in plain
+      language. A good one says <em>what the agent does</em> and <em>when to use it</em>, with the trigger words a
+      request would actually contain.</p>
+    <div class="two-col">
+      <div>
+        <h4>Weak</h4>
+        <ul>
+          <li><code>Helps with code.</code> (matches everything, so it's useless)</li>
+          <li><code>Reviewer agent.</code> (no trigger)</li>
+          <li>A 600-word essay about review philosophy (costs context in every session)</li>
+        </ul>
+      </div>
+      <div>
+        <h4>Strong</h4>
+        <ul>
+          <li><code>Reviews the current branch for bugs, security issues and scope creep. Use after code changes, before opening a pull request.</code></li>
+          <li><code>Writes failing tests that reproduce a reported bug. Use before fixing any bug.</code></li>
+        </ul>
+      </div>
+    </div>
+    <p>Phrases like "Use proactively after code changes" make delegation more likely without being asked. You can
+      always delegate explicitly too ("Use the reviewer subagent on this branch"), and scripts do exactly that.
+      Descriptions are loaded into every session's context, so keep them to a sentence or two: Claude Code warns at
+      startup when the combined descriptions of your custom subagents pass 15,000 tokens.</p>
+    <aside class="callout think"><p>Two of your agents have the descriptions "Fixes bugs" and "Fixes failing CI
+      builds". A user says "CI is red because of a bug in search". Which one should run? Rewrite the descriptions so
+      the answer is obvious.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="prompt">
+    <h2>Prompts with a shape</h2>
+    <p>The body of the file is the subagent's system prompt. Agents given a vague role ("You are a great
+      reviewer") produce vague work. Agents given a <em>shape</em> produce work you can check. A reliable shape has
+      five parts:</p>
+    <ol>
+      <li><strong>Role and boundary.</strong> One sentence: what it does and what it never does. "You review code.
+        You never edit files."</li>
+      <li><strong>Inputs.</strong> What it should read first: the spec, the diff, the failing log.</li>
+      <li><strong>Process.</strong> A few numbered steps. Not a script, but the order that avoids common mistakes
+        (read before you act, run the tests before you finish).</li>
+      <li><strong>Output format.</strong> Exactly what to return, ideally in a form a script can check: labelled
+        findings, a table, a JSON object, a final <code>VERDICT:</code> line.</li>
+      <li><strong>Stop conditions.</strong> When to stop and hand back instead of pushing on: the spec is wrong,
+        a decision belongs to a human, the same fix failed twice.</li>
+    </ol>
+    <pre><code class="language-markdown">You review code. You never edit files.
+
+Inputs: the diff of the current branch against main (`git diff main...HEAD`) and the
+spec in specs/ if there is one.
+
+Process:
+1. Read the whole diff, then the spec.
+2. Check that every acceptance criterion is implemented and tested.
+3. Look for bugs, missing error handling, security problems, and changes outside the spec's scope.
+
+Output: one line per finding, `BLOCKING` or `NIT`, then file:line, the problem, and a fix.
+End with exactly one line: `VERDICT: approve` or `VERDICT: changes requested`.
+
+Stop and say so if there is no diff, or if the change needs a decision only a human can make.
+Say plainly when you find nothing blocking. Do not invent problems to look thorough.</code></pre>
+    <p>The last line matters more than it looks. Models asked to review tend to find <em>something</em>; telling it
+      that "nothing blocking" is an acceptable answer cuts false alarms. The <code>VERDICT:</code> line matters
+      because in Stage 2 a script will read it to decide whether the fleet moves on.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> role and boundary, inputs, process, output format, stop
+      conditions. If a script will read the output, make the format exact.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="tools">
+    <h2>Least-privilege tools</h2>
+    <p>Pick tools from what the role must <em>do</em>, not what might be handy:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Role</th><th>Needs to</th><th>Tools</th></tr></thead>
+      <tbody>
+        <tr><td>Triager</td><td>Read the issue and find the code area</td><td><code>Read, Grep, Glob</code> (plus Bash for <code>gh issue view</code>, limited by rules)</td></tr>
+        <tr><td>Planner</td><td>Read code, write a spec</td><td><code>Read, Grep, Glob, Write</code></td></tr>
+        <tr><td>Implementer</td><td>Read, edit, run tests, delegate tests and review</td><td><code>Read, Grep, Glob, Edit, Write, Bash, Agent</code>, in a worktree</td></tr>
+        <tr><td>Test writer</td><td>Read the spec, write tests, run them</td><td><code>Read, Grep, Glob, Write, Edit, Bash</code>, kept to <code>tests/</code> by a hook</td></tr>
+        <tr><td>Reviewer</td><td>Read the diff and the code</td><td><code>Read, Grep, Glob, Bash</code> with <code>disallowedTools: Edit, Write</code></td></tr>
+      </tbody>
+    </table></div>
+    <p>Notice that tool lists alone can't express "only in <code>tests/</code>" or "only <code>git diff</code>".
+      For that you combine tools with permission rules and hooks. The tools field is the coarse lock; hooks are the
+      fine one.</p>
+    <div class="runnable" data-title="Does this agent have more than it needs?">
+<textarea>
+import fleetlab
+
+reviewer = """---
+name: reviewer
+description: Reviews diffs. Use after code changes.
+tools: Read, Grep, Glob, Bash, Edit
+maxTurns: 25
+---
+You review code. You never edit files.
+"""
+spec = fleetlab.check_agent(reviewer, "reviewer.md")
+print("tools:", sorted(spec.tools))
+print("can change state:", spec.can_write())
+print("edit tools:", sorted(spec.tools & fleetlab.WRITE_TOOLS))
+</textarea>
+    </div>
+    <p>Its prompt says it never edits, but nothing stops it. Remove <code>Edit</code> and add
+      <code>disallowedTools: Edit, Write</code>, then run it again. <code>can_write()</code> stays true because of
+      <code>Bash</code>: that's honest, since a shell can edit files. You'll close that gap with a hook in M04.</p>
+  </section>
+
+  <section class="lesson-section" id="budgets">
+    <h2>Model, effort, turns, and isolation</h2>
+    <p><strong>Model.</strong> Match the model to the stakes and the volume. Triage of every new issue is
+      high-volume and simple: a small model is right. A plan or a review decides what code gets written or merged:
+      use the strongest model you have. <code>inherit</code> uses the caller's model, which is convenient but makes
+      cost depend on who called.</p>
+    <p><strong>Turns.</strong> <code>maxTurns</code> stops a subagent after that many turns and returns what it has.
+      Set it from what the job needs plus headroom: a reviewer that needs 40 turns is probably reading the whole
+      repository. When a well-scoped agent keeps hitting its limit, that's a signal the task or the context is wrong,
+      not that the limit is too low.</p>
+    <p><strong>Isolation.</strong> <code>isolation: worktree</code> runs the subagent in a temporary git worktree, a
+      separate checkout of the repository. Two builders working at once can't overwrite each other's files, and a
+      failed attempt is just a worktree to throw away.</p>
+    <p><strong>Background.</strong> Subagents run in the foreground by default, blocking the caller until they
+      finish. Background subagents run while the caller keeps working, and their results arrive as notifications.
+      By default up to 20 can run at once.</p>
+  </section>
+
+  <section class="lesson-section" id="testing">
+    <h2>Using and testing a subagent</h2>
+    <p>Once the file exists, there are three ways it runs:</p>
+    <ul>
+      <li><strong>Automatic delegation:</strong> the main session picks it from its description.</li>
+      <li><strong>Explicit:</strong> "Use the reviewer subagent to review this branch."</li>
+      <li><strong>As the main agent of a run:</strong> <code>claude --agent reviewer</code>, or from a script with
+        <code>-p</code>. With <code>--bare</code>, pass definitions as JSON with <code>--agents</code>.</li>
+    </ul>
+    <p>Test an agent the way you'd test code: with a fixed input and a known right answer. For a reviewer that means
+      a <strong>seeded change</strong>: a diff you wrote with a bug you know about. For shelf, a good one "fixes"
+      issue #1 by lower-casing the search term but not the titles, so the bug just moves. Run the reviewer on it
+      several times. Does it find the bug every time? Does it report problems that aren't there? Does it end with
+      the <code>VERDICT:</code> line? Change one thing in the prompt at a time and run again.</p>
+    <pre data-label="Terminal"><code class="language-bash">cd work/m02-lab1
+git init -q && git add -A && git commit -qm base
+git apply ../../labs/m02-lab1/seeded/bad-fix.patch   # the seeded change
+claude -p "Use the reviewer subagent to review the uncommitted changes." --allowedTools "Read,Grep,Glob,Bash(git diff *)"</code></pre>
+    <aside class="callout warn"><p>Model output varies from run to run. One good review proves little. Run the same
+      seeded change three to five times before you trust a prompt change. Stage 2 turns this into an evaluation set
+      you can rerun on every change to your fleet.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Five exercises: writing definitions, choosing tools, linting descriptions and prompts, and resolving which
+      definition wins.</p>
+
+    <div class="exercise" data-id="m02-e1" data-title="Write a read-only reviewer">
+      <div class="exercise-prompt">
+        <p>Set <code>agent</code> to a complete subagent definition named <code>reviewer</code> that passes
+          <code>fleetlab.check_agent(agent, "reviewer.md")</code> with no problems and also:</p>
+        <ul>
+          <li>has <code>Read</code>, <code>Grep</code> and <code>Glob</code>, and no edit tools after
+            <code>disallowedTools</code> is applied;</li>
+          <li>has a description that includes the word <code>Use</code> (when to delegate) and is under 200
+            characters;</li>
+          <li>sets <code>maxTurns</code> between 5 and 40 and a <code>model</code>;</li>
+          <li>has a prompt that mentions <code>BLOCKING</code>, <code>NIT</code>, and <code>VERDICT:</code>.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+agent = """---
+name: reviewer
+description: TODO
+---
+
+TODO
+"""
+</textarea>
+      <script type="text/x-python" class="tests">
+import fleetlab
+
+def spec():
+    return fleetlab.check_agent(agent, "reviewer.md")
+
+def test_valid():
+    assert spec().problems == [], "; ".join(spec().problems)
+
+def test_tools():
+    tools = spec().tools
+    assert tools is not None, "set tools explicitly; inheriting every tool is not least privilege"
+    assert {"Read", "Grep", "Glob"} <= tools, "the reviewer needs Read, Grep and Glob"
+    assert not (tools & fleetlab.WRITE_TOOLS), f"no edit tools: found {sorted(tools & fleetlab.WRITE_TOOLS)}"
+
+def test_description():
+    d = str(spec().meta.get("description", ""))
+    assert "Use" in d, "say when to use it"
+    assert len(d) < 200, "keep the description under 200 characters"
+
+def test_budget_and_model():
+    m = spec().meta
+    assert isinstance(m.get("maxTurns"), int) and 5 <= m["maxTurns"] <= 40, "maxTurns between 5 and 40"
+    assert m.get("model"), "choose a model"
+
+def test_output_format():
+    p = spec().prompt
+    for word in ("BLOCKING", "NIT", "VERDICT:"):
+        assert word in p, f"the prompt should define the output with {word}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Start from the example file in "Anatomy of a subagent file" and
+        the prompt in "Prompts with a shape". Check your work with
+        <code>print(fleetlab.check_agent(agent, "reviewer.md").problems)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">agent = """---
+name: reviewer
+description: Reviews the current branch for bugs and scope creep. Use after code changes, before a pull request.
+tools: Read, Grep, Glob, Bash
+disallowedTools: Edit, Write
+model: sonnet
+maxTurns: 25
+---
+
+You review code. You never edit files.
+Report each finding as BLOCKING or NIT with file:line, the problem, and a fix.
+End with one line: VERDICT: approve or VERDICT: changes requested.
+"""</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m02-e2" data-title="Least-privilege tools">
+      <div class="exercise-prompt">
+        <p>Write <code>tools_for(needs)</code>. <code>needs</code> is a set drawn from <code>"read"</code>,
+          <code>"search"</code>, <code>"edit"</code>, <code>"create"</code>, <code>"run"</code>, and
+          <code>"delegate"</code>. Return the sorted list of the smallest set of Claude Code tools that covers them:
+          read → <code>Read</code>; search → <code>Grep</code> and <code>Glob</code>; edit → <code>Edit</code>; create
+          → <code>Write</code>; run → <code>Bash</code>; delegate → <code>Agent</code>.</p>
+      </div>
+<textarea class="starter">
+def tools_for(needs):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_reviewer():
+    assert tools_for({"read", "search"}) == ["Glob", "Grep", "Read"]
+
+def test_builder():
+    assert tools_for({"read", "search", "edit", "create", "run", "delegate"}) == ["Agent", "Bash", "Edit", "Glob", "Grep", "Read", "Write"]
+
+def test_planner():
+    assert tools_for({"read", "search", "create"}) == ["Glob", "Grep", "Read", "Write"], "a planner creates a spec but never edits code"
+
+def test_nothing():
+    assert tools_for(set()) == []
+      </script>
+      <details class="hint"><summary>Hint</summary><p>A dictionary from need to a tuple of tools, then a set union, then
+        <code>sorted</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">NEED_TOOLS = {
+    "read": ("Read",), "search": ("Grep", "Glob"), "edit": ("Edit",),
+    "create": ("Write",), "run": ("Bash",), "delegate": ("Agent",),
+}
+
+def tools_for(needs):
+    tools = set()
+    for need in needs:
+        tools.update(NEED_TOOLS[need])
+    return sorted(tools)</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m02-e3" data-title="Lint a description">
+      <div class="exercise-prompt">
+        <p>Write <code>description_problems(text)</code> returning a list of strings, one per problem:</p>
+        <ul>
+          <li><code>"too long"</code> when longer than 250 characters;</li>
+          <li><code>"no trigger"</code> when it contains neither <code>"Use "</code> nor <code>"use "</code>;</li>
+          <li><code>"too vague"</code> when, lower-cased, it contains any of <code>"helps with"</code>,
+            <code>"does stuff"</code>, <code>"general purpose"</code>.</li>
+        </ul>
+        <p>Report problems in that order. A good description returns an empty list.</p>
+      </div>
+<textarea class="starter">
+def description_problems(text):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_good():
+    assert description_problems("Writes failing tests that reproduce a bug. Use before fixing any bug.") == []
+
+def test_vague_without_trigger():
+    assert description_problems("Helps with code.") == ["no trigger", "too vague"]
+
+def test_long():
+    assert description_problems("Use it. " + "x" * 260) == ["too long"]
+
+def test_lowercase_trigger():
+    assert description_problems("Reviews diffs; use after edits.") == []
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Build the list with three independent <code>if</code> checks in
+        the stated order.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">VAGUE = ("helps with", "does stuff", "general purpose")
+
+def description_problems(text):
+    problems = []
+    if len(text) > 250:
+        problems.append("too long")
+    if "Use " not in text and "use " not in text:
+        problems.append("no trigger")
+    if any(v in text.lower() for v in VAGUE):
+        problems.append("too vague")
+    return problems</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m02-e4" data-title="Does the prompt have a shape?">
+      <div class="exercise-prompt">
+        <p>Write <code>missing_parts(prompt)</code> that returns, in this order, which of these parts a prompt is
+          missing, using simple case-insensitive keyword checks:</p>
+        <ul>
+          <li><code>"boundary"</code>: none of <code>"never"</code>, <code>"do not"</code>, <code>"don't"</code>;</li>
+          <li><code>"output"</code>: none of <code>"output"</code>, <code>"report"</code>, <code>"return"</code>;</li>
+          <li><code>"stop"</code>: none of <code>"stop"</code>, <code>"hand back"</code>, <code>"escalate"</code>.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+def missing_parts(prompt):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+GOOD = "You review code. You never edit files. Report each finding. Stop if there is no diff."
+
+def test_complete():
+    assert missing_parts(GOOD) == []
+
+def test_vague():
+    assert missing_parts("You are an excellent reviewer.") == ["boundary", "output", "stop"]
+
+def test_case_insensitive():
+    assert missing_parts("NEVER edit. RETURN a list. ESCALATE when unsure.") == []
+
+def test_partial():
+    assert missing_parts("Do not edit files. Return findings.") == ["stop"]
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Lower-case the prompt once. A part is missing when
+        <code>not any(word in text for word in words)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">PARTS = [
+    ("boundary", ("never", "do not", "don't")),
+    ("output", ("output", "report", "return")),
+    ("stop", ("stop", "hand back", "escalate")),
+]
+
+def missing_parts(prompt):
+    text = prompt.lower()
+    return [name for name, words in PARTS if not any(w in text for w in words)]</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m02-e5" data-title="Which definition wins?">
+      <div class="exercise-prompt">
+        <p>Write <code>resolve(definitions)</code>. Each definition is a dict with <code>"name"</code> and
+          <code>"scope"</code>, where scope is one of <code>"managed"</code>, <code>"cli"</code>,
+          <code>"project"</code>, <code>"user"</code>, <code>"plugin"</code> (highest priority first). Return a dict
+          mapping each name to the scope of the definition that wins.</p>
+      </div>
+<textarea class="starter">
+def resolve(definitions):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_project_beats_user():
+    defs = [{"name": "reviewer", "scope": "user"}, {"name": "reviewer", "scope": "project"}]
+    assert resolve(defs) == {"reviewer": "project"}
+
+def test_managed_beats_all():
+    defs = [{"name": "r", "scope": "cli"}, {"name": "r", "scope": "managed"}, {"name": "r", "scope": "project"}]
+    assert resolve(defs) == {"r": "managed"}
+
+def test_independent_names():
+    defs = [{"name": "a", "scope": "plugin"}, {"name": "b", "scope": "user"}, {"name": "a", "scope": "cli"}]
+    assert resolve(defs) == {"a": "cli", "b": "user"}
+
+def test_empty():
+    assert resolve([]) == {}
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Give each scope a rank with
+        <code>ORDER.index(scope)</code>; for each name keep the definition with the lowest rank.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">ORDER = ["managed", "cli", "project", "user", "plugin"]
+
+def resolve(definitions):
+    winners = {}
+    for d in definitions:
+        current = winners.get(d["name"])
+        if current is None or ORDER.index(d["scope"]) < ORDER.index(current):
+            winners[d["name"]] = d["scope"]
+    return winners</code></pre></details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Lab: your fleet's first two agents</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Lab m02-lab1</span><span class="w-title">A reviewer and a test writer for shelf</span></div>
+      <div class="widget-body">
+        <p>Write <code>.claude/agents/reviewer.md</code> and <code>.claude/agents/test-writer.md</code> for the shelf
+          project. The README gives the specification for each: the role, the tools it may and may not have, its
+          budget, and the output format a later script will depend on. The checks parse both files and enforce the
+          spec. The live check runs your reviewer with the real <code>claude</code> CLI on a seeded bad fix for
+          issue #1 and expects it to block the change.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi run start m02-lab1
+# read labs/m02-lab1/README.md, write the two agent files in work/m02-lab1/.claude/agents/
+pixi run grade m02-lab1
+pixi run grade-live m02-lab1   # optional: run your reviewer on the seeded change</code></pre>
+        <ul class="checklist" data-id="m02-lab1">
+          <li>Both files pass <code>check_agent</code> with no problems</li>
+          <li>The reviewer cannot edit or write files</li>
+          <li>The test writer's prompt keeps it to tests and asks for a failing test first</li>
+          <li>Both have a model, a turn budget, and a description that says when to use them</li>
+          <li>The reviewer's output format ends with a <code>VERDICT:</code> line</li>
+          <li>Ran the reviewer on the seeded change at least three times and recorded what it found</li>
+        </ul>
+        <p><strong>Stretch:</strong> write a third agent, <code>triager</code>, that classifies shelf's five issues,
+          and see whether it spots the prompt injection in issue #5.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m02-quiz">
+<script type="application/json">
+{"title": "Writing a Subagent quiz", "passScore": 0.7, "questions": [
+  {"type": "multi", "prompt": "What does a subagent get that the main conversation does not share?", "options": ["Its own context window", "Its own system prompt (the file's body)", "Its own tool set and limits", "A copy of the caller's full history"], "answer": [0, 1, 2], "explanation": "<p>A subagent starts fresh with its own prompt and tools. It doesn't inherit the caller's history; it gets the task it's given.</p>"},
+  {"type": "single", "prompt": "Which two frontmatter fields are required?", "options": ["name and tools", "name and description", "description and model", "name and maxTurns"], "answer": 1, "explanation": "<p>Only <code>name</code> and <code>description</code> are required. Everything else has a default, which is why setting <code>tools</code> and <code>maxTurns</code> deliberately matters.</p>"},
+  {"type": "single", "prompt": "A personal <code>~/.claude/agents/reviewer.md</code> and a project <code>.claude/agents/reviewer.md</code> both exist. Which runs in that project?", "options": ["The personal one", "The project one", "Both, in turn", "Neither; names must be unique"], "answer": 1, "explanation": "<p>Project definitions take priority over user definitions with the same name.</p>"},
+  {"type": "single", "prompt": "What happens if you omit <code>tools</code>?", "options": ["The agent gets no tools", "The agent inherits the caller's tools", "Only Read is allowed", "Claude Code refuses to load it"], "answer": 1, "explanation": "<p>Omitted tools are inherited. For least privilege, always list them.</p>"},
+  {"type": "single", "prompt": "What decides whether Claude delegates a request to your subagent automatically?", "options": ["Its name", "Its description", "Its model", "Its file size"], "answer": 1, "explanation": "<p>Claude matches requests against descriptions. Say what the agent does and when to use it.</p>"},
+  {"type": "multi", "prompt": "Which belong in a well-shaped prompt?", "options": ["Role and boundary", "Inputs to read first", "A short process", "An exact output format", "Stop conditions", "Flattery about how skilled it is"], "answer": [0, 1, 2, 3, 4], "explanation": "<p>Role, inputs, process, output, stop. Flattery adds tokens and no behaviour.</p>"},
+  {"type": "single", "prompt": "Why tell a reviewer that \"nothing blocking\" is an acceptable answer?", "options": ["To save tokens", "Review prompts push models to find something; permission to say nothing cuts false alarms", "It is required syntax", "So it stops earlier"], "answer": 1, "explanation": "<p>Without it, reviews tend to invent minor problems. Explicit permission makes clean reviews possible.</p>"},
+  {"type": "single", "prompt": "A reviewer has <code>tools: Read, Grep, Glob, Bash</code> and <code>disallowedTools: Edit, Write</code>. Can it still change files?", "options": ["No, it is read-only", "Yes, through Bash; close that with permission rules and hooks", "Only if it is in plan mode", "Only through Agent"], "answer": 1, "explanation": "<p>A shell can edit files. Tools are the coarse lock; permission rules and hooks are the fine one.</p>"},
+  {"type": "single", "prompt": "Two builder agents run at once on different issues. Which field prevents them overwriting each other?", "options": ["background: true", "isolation: worktree", "omitClaudeMd: true", "memory: project"], "answer": 1, "explanation": "<p>Each runs in its own temporary git worktree, a separate checkout.</p>"},
+  {"type": "single", "prompt": "A well-scoped agent keeps hitting <code>maxTurns</code>. What is the best first response?", "options": ["Double maxTurns", "Look at the transcript: the task or its context is probably wrong", "Switch to bypassPermissions", "Remove maxTurns"], "answer": 1, "explanation": "<p>Hitting the budget is a signal. Read the transcript for drift, starvation, or a doom loop before raising limits.</p>"},
+  {"type": "text", "prompt": "Which tool should you leave out of an agent's <code>tools</code> so it cannot start subagents of its own?", "answer": ["Agent"], "explanation": "<p>Without the Agent tool, a subagent can't delegate further.</p>"},
+  {"type": "single", "prompt": "Why test a reviewer on a seeded change several times?", "options": ["The first run is always wrong", "Model output varies; one good run proves little", "Claude Code caches the first answer", "To warm up the model"], "answer": 1, "explanation": "<p>Repeat runs show whether the agent catches the bug reliably and whether it invents problems.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A subagent has its own context, prompt, and tools, and returns a summary. Use one for focused work that
+        benefits from a fresh context or tighter tools.</li>
+      <li>Files live in <code>.claude/agents/</code> (commit them). Managed and <code>--agents</code> definitions win
+        over project, which wins over user.</li>
+      <li>Always set <code>tools</code> and <code>maxTurns</code>; add <code>disallowedTools</code> as a second lock;
+        use <code>isolation: worktree</code> for agents that edit.</li>
+      <li>The description is a routing rule: what it does and when to use it, in a sentence or two.</li>
+      <li>Prompts need a role and boundary, inputs, process, exact output, and stop conditions.</li>
+      <li>Test agents on seeded changes, several runs each, one prompt change at a time.</li>
+    </ul>
+    <div class="flashcards" data-title="Writing a subagent">
+      <script type="application/json">
+      [{"front": "Required frontmatter fields", "back": "<code>name</code> and <code>description</code>."},
+       {"front": "Where project subagents live", "back": "<code>.claude/agents/&lt;name&gt;.md</code>, committed to the repo."},
+       {"front": "Omitting <code>tools</code> means…", "back": "The agent inherits the caller's tools."},
+       {"front": "What the description is for", "back": "Routing: Claude reads it to decide when to delegate."},
+       {"front": "Five parts of a prompt", "back": "Role and boundary, inputs, process, output format, stop conditions."},
+       {"front": "<code>isolation: worktree</code>", "back": "Runs the subagent in a temporary git worktree so parallel editors can't collide."},
+       {"front": "<code>disallowedTools</code>", "back": "Tools removed from the inherited or listed set; a second lock on agents that must not edit."},
+       {"front": "Stop a subagent from delegating", "back": "Leave <code>Agent</code> out of its tools."},
+       {"front": "Name collision priority", "back": "Managed > --agents > project > user > plugin."},
+       {"front": "How to test an agent", "back": "A seeded change with a known right answer, run several times, one prompt change at a time."}]
+      </script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://code.claude.com/docs/en/sub-agents">Claude Code: Create custom subagents</a></li>
+      <li><a href="../reference/cheatsheet.html">Agent and hook cheat sheet</a></li>
+      <li>Next: <a href="m03-context-engineering.html">M03 Context Engineering</a>, where you decide what every agent reads before it starts</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
