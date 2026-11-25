@@ -44,8 +44,12 @@ def test_reviewer(workspace: Path) -> None:
     common(spec, "reviewer")
     tools = spec.tools or set()
     assert {"Read", "Grep", "Glob"} <= tools, "the reviewer needs Read, Grep and Glob"
-    assert not tools & fleetlab.WRITE_TOOLS, f"the reviewer must not edit: remove {sorted(tools & fleetlab.WRITE_TOOLS)}"
-    assert re.search(r"\b(edit|change|modify)", spec.prompt, re.IGNORECASE), "the boundary should be about not editing files"
+    assert not tools & fleetlab.WRITE_TOOLS, (
+        f"the reviewer must not edit: remove {sorted(tools & fleetlab.WRITE_TOOLS)}"
+    )
+    assert re.search(r"\b(edit|change|modify)", spec.prompt, re.IGNORECASE), (
+        "the boundary should be about not editing files"
+    )
 
 
 def test_reviewer_output_format(workspace: Path) -> None:
@@ -78,11 +82,23 @@ def test_live_reviewer_blocks_seeded_fix(workspace: Path, claude_cli: str, tmp_p
     git("-c", "user.name=lab", "-c", "user.email=lab@example.com", "commit", "-qm", "base")
     git("apply", str(SEEDED))
     done = subprocess.run(
-        [claude_cli, "-p", "Use the reviewer subagent to review the uncommitted changes in this repository. "
-         "Reply with the reviewer's findings and its final VERDICT line exactly.",
-         "--allowedTools", "Read,Grep,Glob,Agent,Bash(git diff *),Bash(git status *)",
-         "--max-turns", "30", "--output-format", "json"],
-        cwd=repo, capture_output=True, text=True, timeout=900, check=False,
+        [
+            claude_cli,
+            "-p",
+            "Use the reviewer subagent to review the uncommitted changes in this repository. "
+            "Reply with the reviewer's findings and its final VERDICT line exactly.",
+            "--allowedTools",
+            "Read,Grep,Glob,Agent,Bash(git diff *),Bash(git status *)",
+            "--max-turns",
+            "30",
+            "--output-format",
+            "json",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=900,
+        check=False,
     )
     assert done.returncode == 0, done.stderr[-1000:]
     result = fleetlab.parse_stream(done.stdout).result or {}

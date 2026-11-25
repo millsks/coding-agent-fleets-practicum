@@ -75,7 +75,9 @@ def test_rules(agents_md: str) -> None:
 
 def test_no_secrets(workspace: Path) -> None:
     for path in workspace.rglob("*.md"):
-        assert not SECRET.search(path.read_text(encoding="utf-8")), f"{path.name} contains something that looks like a key"
+        assert not SECRET.search(path.read_text(encoding="utf-8")), (
+            f"{path.name} contains something that looks like a key"
+        )
 
 
 def test_claude_md_imports_agents_md(workspace: Path) -> None:
@@ -98,4 +100,6 @@ def test_skill(workspace: Path) -> None:
         assert name in doc.body, f"the procedure should name {name}"
     assert "reference.md" in doc.body, "link to reference.md so detail loads only when needed"
     reference = folder / "reference.md"
-    assert reference.is_file() and reference.read_text(encoding="utf-8").strip(), "create a non-empty reference.md next to SKILL.md"
+    assert reference.is_file() and reference.read_text(encoding="utf-8").strip(), (
+        "create a non-empty reference.md next to SKILL.md"
+    )

@@ -61,7 +61,9 @@ def test_doom_loop_with_subagent(workspace: Path) -> None:
     assert data["subagent_tool_calls"] == {"Grep": 1, "Read": 1}, "calls with parent_tool_use_id belong here"
     assert len(data["failed_calls"]) == 3
     assert data["failed_calls"][0] == {"tool": "Bash", "input": {"command": "python -m pytest -q tests/test_cli.py"}}
-    assert data["warnings"] == ["doom_loop"], "pytest ran after the last edit (so it is verified) but failed three times in a row"
+    assert data["warnings"] == ["doom_loop"], (
+        "pytest ran after the last edit (so it is verified) but failed three times in a row"
+    )
 
 
 def test_truncated_run(workspace: Path) -> None:
@@ -88,9 +90,23 @@ def test_live_run(workspace: Path, claude_cli: str, tmp_path: Path) -> None:
     transcript = tmp_path / "live.jsonl"
     with transcript.open("w", encoding="utf-8") as out:
         subprocess.run(
-            [claude_cli, "-p", "Read shelf/store.py and summarise it in two sentences.", "--allowedTools", "Read",
-             "--max-turns", "4", "--output-format", "stream-json", "--verbose"],
-            cwd=workspace, stdout=out, text=True, timeout=300, check=False,
+            [
+                claude_cli,
+                "-p",
+                "Read shelf/store.py and summarise it in two sentences.",
+                "--allowedTools",
+                "Read",
+                "--max-turns",
+                "4",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+            ],
+            cwd=workspace,
+            stdout=out,
+            text=True,
+            timeout=300,
+            check=False,
         )
     data = summarize(workspace, transcript)
     assert data["finished"] is True, "the live run should reach its result line"

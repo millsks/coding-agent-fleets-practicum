@@ -31,7 +31,11 @@ def test_test_command_runs_and_passes(answers: dict[str, object], workspace: Pat
 
 def test_test_count(answers: dict[str, object], workspace: Path) -> None:
     done = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q"], cwd=workspace, capture_output=True, text=True, check=False
+        [sys.executable, "-m", "pytest", "--collect-only", "-q"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     match = re.search(r"(\d+) tests? collected", done.stdout)
     assert match, f"could not collect shelf's tests:\n{done.stdout[-800:]}"

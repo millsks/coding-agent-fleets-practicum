@@ -32,22 +32,34 @@ def set_command(project: Path, command: str) -> None:
     (project / ".claude" / "check-command").write_text(f"# check command\n\n{command}\n", encoding="utf-8")
 
 
-def stop(hook: Path, project: Path, *, active: bool = False, env: dict[str, str] | None = None, cwd: Path | None = None) -> fleetlab.HookResult:
+def stop(
+    hook: Path, project: Path, *, active: bool = False, env: dict[str, str] | None = None, cwd: Path | None = None
+) -> fleetlab.HookResult:
     full_env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), **(env or {})}
-    return fleetlab.run_script(hook, fleetlab.stop(active=active, cwd=str(project)), cwd=cwd or project, env=full_env, timeout=120)
+    return fleetlab.run_script(
+        hook, fleetlab.stop(active=active, cwd=str(project)), cwd=cwd or project, env=full_env, timeout=120
+    )
 
 
 def test_check_command_runs_shelf_tests(workspace: Path, hook: Path) -> None:
     path = workspace / ".claude" / "check-command"
-    lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    lines = [
+        ln.strip()
+        for ln in path.read_text(encoding="utf-8").splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
     assert lines, "put the check command in .claude/check-command"
     assert "pytest" in lines[0], "the check command should run shelf's pytest suite"
     result = stop(hook, workspace)
-    assert result.exit_code == 0, f"on the untouched project the checks pass, so the agent may stop:\n{result.stderr[-800:]}"
+    assert result.exit_code == 0, (
+        f"on the untouched project the checks pass, so the agent may stop:\n{result.stderr[-800:]}"
+    )
 
 
 def test_failing_shelf_test_blocks(hook: Path, project: Path) -> None:
-    (project / "tests" / "test_gate_failure.py").write_text("def test_gate_failure():\n    assert 1 == 2\n", encoding="utf-8")
+    (project / "tests" / "test_gate_failure.py").write_text(
+        "def test_gate_failure():\n    assert 1 == 2\n", encoding="utf-8"
+    )
     result = stop(hook, project)
     assert result.exit_code == 2, f"a failing test must block with exit 2 (got {result.exit_code})"
     assert result.stderr.startswith("Checks failed"), "start stderr with 'Checks failed'"
@@ -55,7 +67,7 @@ def test_failing_shelf_test_blocks(hook: Path, project: Path) -> None:
 
 
 def test_sends_only_the_tail(hook: Path, project: Path) -> None:
-    set_command(project, f'{PY} -c "import sys; [print(f\'line {{i}}\') for i in range(1, 201)]; sys.exit(1)"')
+    set_command(project, f"{PY} -c \"import sys; [print(f'line {{i}}') for i in range(1, 201)]; sys.exit(1)\"")
     result = stop(hook, project)
     assert result.exit_code == 2
     assert "line 200" in result.stderr and "line 161" in result.stderr, "include the last 40 lines"
@@ -63,14 +75,14 @@ def test_sends_only_the_tail(hook: Path, project: Path) -> None:
 
 
 def test_captures_stderr_output(hook: Path, project: Path) -> None:
-    set_command(project, f'{PY} -c "import sys; print(\'boom on stderr\', file=sys.stderr); sys.exit(3)"')
+    set_command(project, f"{PY} -c \"import sys; print('boom on stderr', file=sys.stderr); sys.exit(3)\"")
     result = stop(hook, project)
     assert result.exit_code == 2 and "boom on stderr" in result.stderr, "capture the command's stderr too"
 
 
 def test_stop_hook_active_lets_go_without_running(hook: Path, project: Path) -> None:
     marker = project / "ran.txt"
-    set_command(project, f'{PY} -c "open(\'ran.txt\', \'w\').write(\'x\'); raise SystemExit(1)"')
+    set_command(project, f"{PY} -c \"open('ran.txt', 'w').write('x'); raise SystemExit(1)\"")
     result = stop(hook, project, active=True)
     assert result.exit_code == 0, "when stop_hook_active is true, let the agent stop"
     assert not marker.exists(), "don't run the checks again when stop_hook_active is true"
@@ -102,4 +114,6 @@ def test_settings_wiring(workspace: Path) -> None:
     settings = json.loads((workspace / ".claude" / "settings.json").read_text(encoding="utf-8"))
     commands = fleetlab.hook_commands(settings, "Stop")
     assert any("require_green.py" in c for c in commands), "run require_green.py on Stop"
-    assert all("$CLAUDE_PROJECT_DIR" in c for c in commands if "require_green.py" in c), "use $CLAUDE_PROJECT_DIR in the command"
+    assert all("$CLAUDE_PROJECT_DIR" in c for c in commands if "require_green.py" in c), (
+        "use $CLAUDE_PROJECT_DIR in the command"
+    )

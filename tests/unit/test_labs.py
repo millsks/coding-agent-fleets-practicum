@@ -101,7 +101,9 @@ def test_sample_labs_lay_starter_over_sample(fake_repo: Path) -> None:
     (fake_repo / "sample" / "pkg" / "code.py").write_text("x = 1\n", encoding="utf-8")
     (fake_repo / "sample" / "answer.txt").write_text("sample\n", encoding="utf-8")
     lab_dir = fake_repo / "labs" / "m01-lab1"
-    (lab_dir / "lab.toml").write_text('id = "m01-lab1"\ntitle = "Demo"\nmodule = "m01"\nsample = true\n', encoding="utf-8")
+    (lab_dir / "lab.toml").write_text(
+        'id = "m01-lab1"\ntitle = "Demo"\nmodule = "m01"\nsample = true\n', encoding="utf-8"
+    )
     lab = get_lab(fake_repo, "m01-lab1")
     assert lab.sample
     work = start_lab(fake_repo, lab)

@@ -48,7 +48,9 @@ def guard(workspace: Path) -> Path:
 
 def run(guard: Path, workspace: Path, tool: str, tool_input: dict[str, object]) -> fleetlab.HookResult:
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(workspace)}
-    return fleetlab.run_script(guard, fleetlab.pre_tool_use(tool, tool_input, cwd=str(workspace)), cwd=workspace, env=env)
+    return fleetlab.run_script(
+        guard, fleetlab.pre_tool_use(tool, tool_input, cwd=str(workspace)), cwd=workspace, env=env
+    )
 
 
 @pytest.mark.parametrize("command", BLOCK)
@@ -61,7 +63,9 @@ def test_blocks(guard: Path, workspace: Path, command: str) -> None:
 @pytest.mark.parametrize("command", ALLOW)
 def test_allows(guard: Path, workspace: Path, command: str) -> None:
     result = run(guard, workspace, "Bash", {"command": command})
-    assert result.exit_code == 0 and not result.blocked, f"{command!r} is normal work and must be allowed: {result.reason!r}"
+    assert result.exit_code == 0 and not result.blocked, (
+        f"{command!r} is normal work and must be allowed: {result.reason!r}"
+    )
 
 
 def test_other_tools(guard: Path, workspace: Path) -> None:
@@ -71,7 +75,9 @@ def test_other_tools(guard: Path, workspace: Path) -> None:
 
 def test_missing_command_does_not_crash(guard: Path, workspace: Path) -> None:
     result = run(guard, workspace, "Bash", {})
-    assert result.exit_code == 0, f"a payload with no command should be allowed, not crash (exit {result.exit_code}: {result.stderr[-300:]})"
+    assert result.exit_code == 0, (
+        f"a payload with no command should be allowed, not crash (exit {result.exit_code}: {result.stderr[-300:]})"
+    )
 
 
 def test_settings_wiring(workspace: Path) -> None:
@@ -79,6 +85,10 @@ def test_settings_wiring(workspace: Path) -> None:
     settings = json.loads(path.read_text(encoding="utf-8"))
     bash = fleetlab.hook_commands(settings, "PreToolUse", "Bash")
     assert any("guard_bash.py" in c for c in bash), "run guard_bash.py for Bash in PreToolUse"
-    assert all("$CLAUDE_PROJECT_DIR" in c for c in bash if "guard_bash.py" in c), "use $CLAUDE_PROJECT_DIR in the command"
+    assert all("$CLAUDE_PROJECT_DIR" in c for c in bash if "guard_bash.py" in c), (
+        "use $CLAUDE_PROJECT_DIR in the command"
+    )
     for tool in ("Read", "Edit", "Write"):
-        assert not any("guard_bash.py" in c for c in fleetlab.hook_commands(settings, "PreToolUse", tool)), f"the guard should run for Bash only, not {tool}"
+        assert not any("guard_bash.py" in c for c in fleetlab.hook_commands(settings, "PreToolUse", tool)), (
+            f"the guard should run for Bash only, not {tool}"
+        )
