@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M03 · Context Engineering · Coding Agent Fleets Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/fleetlab-src.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-agent.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m03">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Stage 1 · One Agent · Module 03</p>
+    <h1>Context Engineering</h1>
+    <p class="lede">An agent can only act on what is in its context window. Some of that you choose: the project
+      instructions every agent reads, the skills it can pull in, the spec it's handed. The rest it gathers while
+      working. This module is about choosing well: what loads at startup and what it costs, how to write the
+      AGENTS.md every tool in your fleet will read, how skills load detail only when it's needed, and how to keep
+      long runs from losing the plot.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m02-writing-a-subagent.html">M02 Writing a Subagent</a></span></div>
+    <ul class="objectives">
+      <li>List what loads into an agent's context before it does any work, and estimate what it costs</li>
+      <li>Explain how CLAUDE.md files and imports load, and use AGENTS.md as one source of instructions for every tool</li>
+      <li>Write an AGENTS.md with commands that actually run, a map, and rules, kept short</li>
+      <li>Write a skill in the Agent Skills format and explain its three levels of progressive disclosure</li>
+      <li>Decide whether a rule belongs in AGENTS.md, a skill, or a hook</li>
+      <li>Use subagents and handoff files to keep each agent's context focused, and plan for compaction</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="what-loads">
+    <h2>What's in the window before the agent starts</h2>
+    <p>The <strong>context window</strong> is everything the model sees on a request: instructions, tool
+      definitions, conversation so far, and tool results. It has a fixed size, every token in it costs money on every
+      request, and models follow instructions less reliably as it fills with things that don't matter. Before your
+      agent reads a single file of code, its window already holds:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>What</th><th>Who controls it</th><th>Typical size</th></tr></thead>
+      <tbody>
+        <tr><td>Claude Code's system prompt and built-in tool definitions</td><td>The builder harness</td><td>Large, fixed</td></tr>
+        <tr><td>CLAUDE.md files (and anything they import)</td><td>You</td><td>Whatever you write</td></tr>
+        <tr><td>Names and descriptions of every skill</td><td>You</td><td>A line or two each</td></tr>
+        <tr><td>Names and descriptions of every subagent</td><td>You</td><td>A line or two each</td></tr>
+        <tr><td>Tool definitions from every connected MCP server</td><td>You (by connecting servers)</td><td>Can be very large</td></tr>
+        <tr><td>The task itself: the prompt, a spec, an issue</td><td>Whoever starts the agent</td><td>Varies</td></tr>
+      </tbody>
+    </table></div>
+    <p>A common rough estimate is about four characters per token for English and code. Paste your own CLAUDE.md
+      into the meter to see what it costs on every single request:</p>
+    <div class="viz" data-viz="token-meter" data-config='{"title": "What does your CLAUDE.md cost?", "calls": 40, "text": "# Project\n\nPaste your CLAUDE.md or AGENTS.md here."}'></div>
+    <aside class="callout think"><p>An agent makes 40 requests to fix a bug. A 6,000-token CLAUDE.md is sent with every
+      one. How many tokens does it cost across the run? What if 4,000 of those tokens are a deployment runbook this
+      agent never needs?</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> what loads at startup is paid for on every request and
+      competes with the task for the model's attention. Load a short map up front; pull detail in when it's
+      needed.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="claude-md">
+    <h2>CLAUDE.md, imports, and AGENTS.md</h2>
+    <p><strong>CLAUDE.md</strong> is the file Claude Code reads for project instructions. It loads from several
+      places and combines them:</p>
+    <ul>
+      <li><code>~/.claude/CLAUDE.md</code>: your personal instructions for every project.</li>
+      <li><code>CLAUDE.md</code> at the project root (and in parent directories above where you start): shared,
+        committed instructions.</li>
+      <li><code>CLAUDE.md</code> in a subdirectory: loaded when the agent works with files in that directory, so a
+        package can carry its own notes.</li>
+    </ul>
+    <p>A line of the form <code>@path/to/file</code> <strong>imports</strong> that file's contents. That's the key to
+      working with more than one tool.</p>
+    <p><strong>AGENTS.md</strong> is an open, cross-tool standard for the same job: a README for coding agents. A
+      long list of tools read it, including GitHub Copilot, OpenAI Codex, Cursor, Gemini CLI, and Devin. If your
+      fleet will ever run under more than one tool (Claude Code at home, Copilot or Devin at work), keep the shared
+      instructions in AGENTS.md and make CLAUDE.md a thin pointer:</p>
+    <pre><code class="language-markdown">@AGENTS.md
+
+## Claude Code notes
+
+- The Stop hook runs `make test-fast` before you finish.</code></pre>
+    <p>Now there is one source of truth. Claude Code reads AGENTS.md through the import; the other tools read it
+      directly. Claude-only notes stay in CLAUDE.md.</p>
+    <aside class="callout warn"><p>Some tools read only the start of AGENTS.md (Devin, for example, includes the first
+      16&nbsp;KiB). Put the most important things first and keep the whole file well under that.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="agents-md">
+    <h2>Writing an AGENTS.md that earns its tokens</h2>
+    <p>Every agent reads this file on every run, so every line must change what agents do. Three sections cover most
+      of it:</p>
+    <ol>
+      <li><strong>Commands.</strong> The exact commands to set up, test, lint, and run the project. Agents use these
+        verbatim, so <em>each one must work</em> when pasted into a fresh checkout. A wrong command here is worse than
+        none: every agent will run it, fail, and spend turns working out why.</li>
+      <li><strong>Map.</strong> Where things live, in a few lines. Which directory holds what, where tests go, what's
+        generated. This replaces the knowledge a senior engineer carries in their head.</li>
+      <li><strong>Rules.</strong> The handful of non-negotiables: never weaken tests, change only files in the spec's
+        scope, never commit secrets. Short, specific, and checkable.</li>
+    </ol>
+    <p>Here's a compact example for a different project, a small invoicing service:</p>
+    <pre><code class="language-markdown"># AGENTS.md
+
+Invoicing API (FastAPI + PostgreSQL). Read this first; procedures live in .claude/skills/.
+
+## Commands
+- Setup: `pixi install`
+- Fast checks (run before finishing): `pixi run test-fast`
+- Full tests: `pixi run test`
+- Lint: `pixi run lint`
+
+## Map
+- `api/routes/`: one module per resource; handlers stay thin
+- `api/billing/`: money logic; amounts are integer cents, never floats
+- `migrations/`: generated by `pixi run makemigration`; never edit by hand
+- `tests/`: mirrors `api/`
+
+## Rules
+- Change only the files listed in the spec's "Files in scope".
+- Never delete, skip, or loosen a test to make it pass.
+- Never commit secrets or `.env` files.</code></pre>
+    <p>What it leaves out matters as much: no history of the project, no style rules a linter already enforces, no
+      step-by-step procedures (those are skills), and no rule that must be <em>guaranteed</em> (those are hooks). A
+      useful test for every line: would an agent behave differently without it? If not, delete it.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> commands that run, a map, a few rules. Verify every
+      command in a clean checkout. Delete lines that don't change behaviour.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="skills">
+    <h2>Skills and progressive disclosure</h2>
+    <p>A <strong>skill</strong> is a folder with a <code>SKILL.md</code> file that teaches an agent one procedure:
+      how to cut a release, add a CLI command, write a migration. Skills follow the open
+      <a href="https://agentskills.io">Agent Skills</a> format, which Claude Code, Copilot, Codex, Devin, and many
+      other tools understand. In Claude Code, project skills live in <code>.claude/skills/&lt;name&gt;/SKILL.md</code>.</p>
+    <pre><code class="language-markdown">---
+name: release-notes
+description: Draft release notes from merged pull requests since the last tag. Use when preparing a release.
+---
+
+# Release notes
+
+1. Find the last tag with `git describe --tags --abbrev=0`.
+2. List merged pull requests since then.
+3. Group them using the categories in [categories.md](categories.md).
+...</code></pre>
+    <p>What makes skills efficient is <strong>progressive disclosure</strong>, loading in three levels:</p>
+    <ol>
+      <li><strong>Metadata</strong> (<code>name</code> and <code>description</code>): always in context, so the agent
+        knows the skill exists and when to use it. A line or two.</li>
+      <li><strong>Body</strong> of SKILL.md: loaded only when the skill is used. Keep it under about 500 lines.</li>
+      <li><strong>Linked files</strong> (references, templates, scripts) in the skill's folder: read only if the body
+        sends the agent there. Scripts can be <em>run</em> without being read at all.</li>
+    </ol>
+    <p>So a fleet can carry dozens of procedures while paying, at startup, only for a line per skill. The skill's
+      <code>name</code> must match its folder (lowercase, digits, and single hyphens), and its description, like a
+      subagent's, is a routing rule: what it does and when to use it.</p>
+    <div class="runnable" data-title="Check a skill">
+<textarea>
+import fleetlab
+
+skill = """---
+name: Release_Notes
+description: Release notes.
+---
+"""
+for problem in fleetlab.check_skill(skill, "release-notes"):
+    print("-", problem)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="where-it-belongs">
+    <h2>AGENTS.md, skill, or hook?</h2>
+    <p>Every new rule you want agents to follow has a right home. Choosing wrongly either wastes context on every
+      request or leaves something important to chance.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>If the rule is…</th><th>Put it in</th><th>Because</th></tr></thead>
+      <tbody>
+        <tr><td>A fact every agent needs on every task (commands, layout, conventions)</td><td>AGENTS.md</td><td>Always loaded, shared across tools</td></tr>
+        <tr><td>A multi-step procedure needed only sometimes</td><td>A skill</td><td>Loaded only when used</td></tr>
+        <tr><td>Something that must never happen, or must always happen</td><td>A hook (M04), plus CI</td><td>Enforced by code; prose can be ignored</td></tr>
+        <tr><td>Specific to one role</td><td>That subagent's prompt</td><td>Only that agent pays for it</td></tr>
+        <tr><td>Specific to one task</td><td>The spec or the prompt</td><td>Expires with the task</td></tr>
+      </tbody>
+    </table></div>
+    <p>The most common mistake is putting a <em>must</em> in prose. "Always run the tests before finishing" in
+      AGENTS.md is a request. A Stop hook that runs the tests is a guarantee. Keep the prose line if it helps the agent
+      plan, but don't rely on it.</p>
+  </section>
+
+  <section class="lesson-section" id="focus">
+    <h2>Keeping each agent's context focused</h2>
+    <p>The context an agent <em>gathers</em> matters as much as what it starts with. Three habits keep it focused:</p>
+    <ul>
+      <li><strong>Delegate exploration.</strong> Searching a large codebase fills the window with files that turn out
+        to be irrelevant. Hand that to a subagent (the built-in Explore agent is made for it) and get back a short
+        summary of where things are.</li>
+      <li><strong>Hand off files, not conversations.</strong> The builder shouldn't read the whole issue thread and
+        the planner's reasoning. It should read <code>specs/12.md</code>: the decision, the files in scope, the
+        acceptance criteria. Files are shorter, reviewable, and survive restarts.</li>
+      <li><strong>Size tasks to the window.</strong> An agent asked to "refactor the billing module" will read far
+        more than one asked to "extract the tax calculation from invoice.py into tax.py". Smaller tasks need less
+        context and fail more cheaply.</li>
+    </ul>
+    <p>When a long run approaches the limit, Claude Code <strong>compacts</strong> the conversation: it summarises
+      earlier turns to make room. Summaries lose detail, so an instruction given once early in a long chat can fade.
+      Constraints that must survive belong in files the agent re-reads (AGENTS.md, the spec), not in a message near the
+      start. A subagent can lower its compaction threshold with <code>autoCompactWindow</code>, and one that doesn't
+      need project instructions can skip them with <code>omitClaudeMd: true</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Five exercises: budgeting the window, reading AGENTS.md like an agent does, writing a skill, deciding where
+      rules belong, and finding what a truncating tool would miss.</p>
+
+    <div class="exercise" data-id="m03-e1" data-title="Startup budget">
+      <div class="exercise-prompt">
+        <p>Write <code>startup_report(parts, calls)</code>. <code>parts</code> maps a name (like
+          <code>"CLAUDE.md"</code>) to its text. Return a dict with <code>"tokens"</code> (total estimated tokens
+          using <code>fleetlab.estimate_tokens</code>), <code>"per_run"</code> (tokens times <code>calls</code>), and
+          <code>"largest"</code> (the name with the most tokens).</p>
+      </div>
+<textarea class="starter">
+import fleetlab
+
+def startup_report(parts, calls):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+PARTS = {"CLAUDE.md": "x" * 4000, "skills": "y" * 400, "mcp tools": "z" * 12000}
+
+def test_totals():
+    r = startup_report(PARTS, 10)
+    assert r["tokens"] == 1000 + 100 + 3000, "estimate each part and add them up"
+    assert r["per_run"] == 41000, "multiply by the number of calls"
+
+def test_largest():
+    assert startup_report(PARTS, 1)["largest"] == "mcp tools"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Build a dict of tokens per part first, then
+        <code>max(tokens, key=tokens.get)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">import fleetlab
+
+def startup_report(parts, calls):
+    tokens = {name: fleetlab.estimate_tokens(text) for name, text in parts.items()}
+    total = sum(tokens.values())
+    return {"tokens": total, "per_run": total * calls, "largest": max(tokens, key=tokens.get)}</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m03-e2" data-title="Find the commands">
+      <div class="exercise-prompt">
+        <p>Write <code>commands(md)</code> that returns every command in backticks on a bullet line inside the
+          <code>## Commands</code> section of an AGENTS.md, in order. The section ends at the next line starting with
+          <code>## </code>. Only text in single backticks counts.</p>
+      </div>
+<textarea class="starter">
+import re
+
+def commands(md):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+MD = """# AGENTS.md
+
+Intro mentioning `not this`.
+
+## Commands
+- Setup: `pixi install`
+- Tests: `pixi run test` (or `pixi run test-fast`)
+Plain line with `ignored`.
+
+## Map
+- `src/`: code
+"""
+
+def test_extracts_in_order():
+    assert commands(MD) == ["pixi install", "pixi run test", "pixi run test-fast"]
+
+def test_no_section():
+    assert commands("# Nothing here\n- `x`\n") == []
+
+def test_section_at_end():
+    assert commands("## Commands\n- `make check`\n") == ["make check"]
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Walk the lines with an <code>inside</code> flag. Turn it on at
+        <code>## Commands</code> and off at any other line starting with <code>## </code>. On bullet lines (starting
+        with <code>- </code>) collect <code>re.findall(r"`([^`]+)`", line)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">import re
+
+def commands(md):
+    found, inside = [], False
+    for line in md.splitlines():
+        if line.startswith("## "):
+            inside = line.strip() == "## Commands"
+            continue
+        if inside and line.lstrip().startswith("- "):
+            found.extend(re.findall(r"`([^`]+)`", line))
+    return found</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m03-e3" data-title="Write a skill">
+      <div class="exercise-prompt">
+        <p>Set <code>skill</code> to a <code>SKILL.md</code> for a skill in the folder <code>bump-version</code> that
+          passes <code>fleetlab.check_skill(skill, "bump-version")</code> with no problems. Its description must say
+          when to use it (include <code>Use</code>), and its body must link to a file named
+          <code>checklist.md</code> in the same folder, for progressive disclosure.</p>
+      </div>
+<textarea class="starter">
+skill = """---
+name: bump-version
+---
+"""
+</textarea>
+      <script type="text/x-python" class="tests">
+import fleetlab
+
+def test_valid():
+    problems = fleetlab.check_skill(skill, "bump-version")
+    assert problems == [], "; ".join(problems)
+
+def test_trigger():
+    doc = fleetlab.parse(skill)
+    assert "Use" in str(doc.meta["description"]), "say when to use the skill"
+
+def test_links_reference():
+    assert "checklist.md" in fleetlab.parse(skill).body, "link to checklist.md so detail loads only when needed"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>You need a <code>description</code> and a non-empty body. A
+        Markdown link like <code>[the checklist](checklist.md)</code> works.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">skill = """---
+name: bump-version
+description: Bump the package version and update the changelog. Use when preparing a release.
+---
+
+1. Decide the next version with semantic versioning.
+2. Update the version and CHANGELOG.md.
+3. Follow [the checklist](checklist.md) before committing.
+"""</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m03-e4" data-title="Where does each rule belong?">
+      <div class="exercise-prompt">
+        <p>Set <code>placement</code> to a dict mapping each rule in <code>RULES</code> to
+          <code>"agents_md"</code>, <code>"skill"</code>, or <code>"hook"</code>, using the table in "AGENTS.md, skill,
+          or hook?". The tests explain any answer they disagree with.</p>
+      </div>
+<textarea class="starter">
+RULES = [
+    "Tests mirror the package layout under tests/",
+    "The steps to add a new CLI subcommand",
+    "Tests must pass before an agent finishes",
+    "Never edit files under .github/workflows/",
+    "How to cut and publish a release",
+    "Run the fast checks with `python -m pytest -q`",
+]
+
+placement = {
+    # rule: "agents_md" | "skill" | "hook"
+}
+</textarea>
+      <script type="text/x-python" class="tests">
+EXPECTED = {
+    "Tests mirror the package layout under tests/": ("agents_md", "a layout fact every agent needs belongs in the map"),
+    "The steps to add a new CLI subcommand": ("skill", "a procedure needed only sometimes is a skill"),
+    "Tests must pass before an agent finishes": ("hook", "a must-always rule needs enforcement: a Stop hook"),
+    "Never edit files under .github/workflows/": ("hook", "a must-never rule needs enforcement: a PreToolUse hook"),
+    "How to cut and publish a release": ("skill", "a multi-step procedure is a skill"),
+    "Run the fast checks with `python -m pytest -q`": ("agents_md", "a command every agent uses belongs in Commands"),
+}
+
+def test_every_rule_placed():
+    missing = [r for r in RULES if r not in placement]
+    assert not missing, f"place every rule; missing: {missing}"
+
+def test_placements():
+    for rule, (where, why) in EXPECTED.items():
+        assert placement.get(rule) == where, f"{rule!r} -> {where}: {why}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Ask of each rule: is it a fact, a procedure, or a guarantee?
+        Facts go in AGENTS.md, procedures in skills, guarantees in hooks.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">RULES = [
+    "Tests mirror the package layout under tests/",
+    "The steps to add a new CLI subcommand",
+    "Tests must pass before an agent finishes",
+    "Never edit files under .github/workflows/",
+    "How to cut and publish a release",
+    "Run the fast checks with `python -m pytest -q`",
+]
+
+placement = {
+    RULES[0]: "agents_md",
+    RULES[1]: "skill",
+    RULES[2]: "hook",
+    RULES[3]: "hook",
+    RULES[4]: "skill",
+    RULES[5]: "agents_md",
+}</code></pre></details>
+    </div>
+
+    <div class="exercise" data-id="m03-e5" data-title="What would a truncating tool miss?">
+      <div class="exercise-prompt">
+        <p>Some tools only read the first <code>limit</code> bytes of AGENTS.md. Write
+          <code>hidden_headings(md, limit=16384)</code> that returns the headings (lines starting with
+          <code>#</code>) that start at or beyond byte <code>limit</code> of the UTF-8 encoded text, in order.</p>
+      </div>
+<textarea class="starter">
+def hidden_headings(md, limit=16384):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_nothing_hidden():
+    assert hidden_headings("# A\n## B\n", limit=100) == []
+
+def test_hidden_after_limit():
+    md = "# Top\n" + "x" * 50 + "\n## Rules\n- r\n"
+    assert hidden_headings(md, limit=20) == ["## Rules"]
+
+def test_counts_bytes_not_characters():
+    md = "# Top\n" + "é" * 10 + "\n## Late\n"
+    assert hidden_headings(md, limit=20) == ["## Late"], "é is two bytes in UTF-8"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep a running byte offset: for each line (from
+        <code>splitlines(keepends=True)</code>), check the offset before adding
+        <code>len(line.encode("utf-8"))</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary><pre><code class="language-python">def hidden_headings(md, limit=16384):
+    hidden, offset = [], 0
+    for line in md.splitlines(keepends=True):
+        if offset >= limit and line.startswith("#"):
+            hidden.append(line.rstrip("\n"))
+        offset += len(line.encode("utf-8"))
+    return hidden</code></pre></details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Lab: shelf's instructions and first skill</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Lab m03-lab1</span><span class="w-title">AGENTS.md, CLAUDE.md, and an add-command skill</span></div>
+      <div class="widget-body">
+        <p>Write the instructions every agent in your fleet will read when working on shelf, and the first
+          procedure they can load on demand. The checks run every command you list (so each must actually work), check
+          the map against the real layout, check that CLAUDE.md imports AGENTS.md, and validate your skill and the
+          reference file it links to.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi run start m03-lab1
+# read labs/m03-lab1/README.md, then write AGENTS.md, CLAUDE.md, and .claude/skills/add-command/
+pixi run grade m03-lab1</code></pre>
+        <ul class="checklist" data-id="m03-lab1">
+          <li>AGENTS.md has Commands, Map, and Rules sections and fits the size limits</li>
+          <li>Every listed command runs successfully in a fresh copy of the workspace</li>
+          <li>CLAUDE.md starts with <code>@AGENTS.md</code></li>
+          <li>The add-command skill is valid, says when to use it, and links to a reference file that exists</li>
+          <li>Asked an agent to add a <code>count</code> subcommand using the skill, and read the transcript</li>
+        </ul>
+        <p><strong>Stretch:</strong> run the same "add a count subcommand" task with and without the skill, and compare
+          the number of turns and whether tests were added.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m03-quiz">
+<script type="application/json">
+{"title": "Context Engineering quiz", "passScore": 0.7, "questions": [
+  {"type": "multi", "prompt": "Which of these are in an agent's context before it reads any code?", "options": ["CLAUDE.md and its imports", "Descriptions of available skills", "Descriptions of available subagents", "Tool definitions from connected MCP servers", "The full bodies of every skill"], "answer": [0, 1, 2, 3], "explanation": "<p>Skill bodies load only when a skill is used. That's progressive disclosure.</p>"},
+  {"type": "single", "prompt": "Why does a long CLAUDE.md cost more than its token count suggests?", "options": ["It's charged at a higher rate", "It's sent with every request in the run, and dilutes the model's attention", "It's re-read from disk each turn", "It disables caching"], "answer": 1, "explanation": "<p>Startup context rides along on every request, and irrelevant text makes instructions easier to miss.</p>"},
+  {"type": "single", "prompt": "You want Claude Code, Copilot, and Devin to share one set of instructions. What's the pattern?", "options": ["Copy the text into each tool's file", "Write AGENTS.md; make CLAUDE.md import it with @AGENTS.md", "Put everything in CLAUDE.md", "Put everything in a skill"], "answer": 1, "explanation": "<p>Other tools read AGENTS.md directly; Claude Code reads it through the import. One source of truth.</p>"},
+  {"type": "single", "prompt": "Why must every command in AGENTS.md be verified in a clean checkout?", "options": ["For style", "Agents run them verbatim; a broken command makes every agent fail and waste turns", "Linters require it", "It shortens the file"], "answer": 1, "explanation": "<p>A wrong command is worse than none. The lab's checks run each one for that reason.</p>"},
+  {"type": "single", "prompt": "Where does \"tests must pass before an agent finishes\" belong?", "options": ["AGENTS.md only", "A skill", "A hook (with CI as backup)", "The issue template"], "answer": 2, "explanation": "<p>It's a guarantee, so it needs enforcement. Prose can be ignored; a Stop hook can't.</p>"},
+  {"type": "single", "prompt": "What are the three levels of progressive disclosure in a skill?", "options": ["Title, body, footer", "Metadata always; body when used; linked files when read", "Draft, review, publish", "User, project, managed"], "answer": 1, "explanation": "<p>Only the name and description cost context up front.</p>"},
+  {"type": "multi", "prompt": "Which skill names are valid?", "options": ["add-command", "Add_Command", "release-notes-2", "release--notes"], "answer": [0, 2], "explanation": "<p>Lowercase letters, digits, and single hyphens, matching the folder name.</p>"},
+  {"type": "single", "prompt": "Why can't a tool that reads only the first 16 KiB of AGENTS.md see your Rules section?", "options": ["Rules are ignored by design", "It comes after the 16 KiB cut-off", "Rules must be in CLAUDE.md", "Rules need a special tag"], "answer": 1, "explanation": "<p>Put the most important content first and keep the file short.</p>"},
+  {"type": "single", "prompt": "How should the builder learn what to build?", "options": ["Read the whole issue thread and the planner's chat", "Read the spec file the planner wrote", "Guess from the branch name", "Ask the reviewer"], "answer": 1, "explanation": "<p>Hand off files, not conversations: shorter, reviewable, and they survive restarts.</p>"},
+  {"type": "single", "prompt": "A constraint given once early in a very long session stops being followed. What's the likely cause?", "options": ["The model ignored it on purpose", "Compaction summarised the early turns and the detail faded", "The hook expired", "The skill unloaded"], "answer": 1, "explanation": "<p>Put constraints that must survive in files the agent re-reads, such as AGENTS.md or the spec.</p>"},
+  {"type": "text", "prompt": "Which subagent frontmatter field skips CLAUDE.md files at startup?", "answer": ["omitClaudeMd"], "explanation": "<p><code>omitClaudeMd: true</code> keeps project instructions out of agents that don't need them.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Startup context (CLAUDE.md, skill and agent descriptions, MCP tool definitions) is paid for on every request
+        and competes for attention.</li>
+      <li>CLAUDE.md loads from your home, the project root, and subdirectories; <code>@file</code> imports. Keep shared
+        instructions in AGENTS.md and import it.</li>
+      <li>AGENTS.md: commands that run, a map, a few rules. Delete lines that don't change behaviour.</li>
+      <li>Skills: <code>.claude/skills/&lt;name&gt;/SKILL.md</code>; metadata always, body when used, linked files when
+        read.</li>
+      <li>Facts in AGENTS.md, procedures in skills, guarantees in hooks.</li>
+      <li>Delegate exploration, hand off files, size tasks to the window, and put lasting constraints in files.</li>
+    </ul>
+    <div class="flashcards" data-title="Context engineering">
+      <script type="application/json">
+      [{"front": "What's loaded before the agent reads code?", "back": "System prompt and tools, CLAUDE.md and imports, skill and subagent descriptions, MCP tool definitions, the task."},
+       {"front": "Rough token estimate", "back": "About 4 characters per token for English and code."},
+       {"front": "One instruction file for many tools", "back": "AGENTS.md, with CLAUDE.md containing <code>@AGENTS.md</code>."},
+       {"front": "Three sections of a good AGENTS.md", "back": "Commands (that run), Map, Rules."},
+       {"front": "Progressive disclosure", "back": "Metadata always; SKILL.md body when used; linked files when read."},
+       {"front": "Where project skills live", "back": "<code>.claude/skills/&lt;name&gt;/SKILL.md</code>; name matches the folder."},
+       {"front": "Fact, procedure, guarantee", "back": "AGENTS.md, skill, hook."},
+       {"front": "Hand off…", "back": "Files, not conversations."},
+       {"front": "Compaction", "back": "Summarising earlier turns near the limit; details fade, so lasting constraints go in files."},
+       {"front": "Devin and AGENTS.md", "back": "Reads only the first 16 KiB. Most important content first."}]
+      </script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://code.claude.com/docs/en/memory">Claude Code: Memory and CLAUDE.md</a> and <a href="https://code.claude.com/docs/en/skills">Skills</a></li>
+      <li><a href="https://agents.md">AGENTS.md</a> and <a href="https://agentskills.io">Agent Skills</a> specifications</li>
+      <li><a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">Equipping agents for the real world with Agent Skills</a> (Anthropic Engineering)</li>
+      <li>Next: <a href="m04-hooks-and-gates.html">M04 Hooks and Gates</a>, where rules become guarantees</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,2 @@
+# The command the Stop gate runs before an agent may finish. First non-comment line wins.
+# TODO

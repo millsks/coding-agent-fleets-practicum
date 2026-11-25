@@ -1,0 +1,13 @@
+# Answer each question about shelf. See labs/m00-lab1/README.md for what each key means.
+
+test_command = ""
+test_count = 0
+storage_env_var = ""
+issue_1_file = ""
+issue_1_function = ""
+issue_2_function = ""
+injection_issue = 0
+agent_ready = []
+
+[not_ready_reasons]
+# "N" = "why issue N is not ready for an agent"

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossary · Coding Agent Fleets Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/fleetlab-src.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-agent.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-page="ref-glossary">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Reference · Vocabulary</p>
+    <h1>Glossary</h1>
+    <p class="lede">Terms used in the course, with a link to where each is taught.</p>
+  </header>
+  <section class="lesson-section" id="terms">
+    <h2>Terms</h2>
+    <dl>
+      <dt id="term-agent">Agent</dt>
+      <dd>A language model running in a loop with tools, deciding step by step what to do next. <a href="../modules/m00-orientation.html#the-fleet">Taught in M00</a></dd>
+      <dt id="term-agent-loop">Agent loop</dt>
+      <dd>Request, tool calls, results, repeat until the model stops asking for tools. In Claude Code: gather, act, verify. <a href="../modules/m01-the-harness.html#loop">Taught in M01</a></dd>
+      <dt id="term-agents-md">AGENTS.md</dt>
+      <dd>An open, cross-tool file of instructions for coding agents. Import it from CLAUDE.md with @AGENTS.md. <a href="../modules/m03-context-engineering.html#claude-md">Taught in M03</a></dd>
+      <dt id="term-bare-mode-bare">Bare mode (--bare)</dt>
+      <dd>A headless run that loads nothing it isn&#x27;t told about: no hooks, skills, subagents, MCP servers, or CLAUDE.md. <a href="../modules/m01-the-harness.html#headless">Taught in M01</a></dd>
+      <dt id="term-builder-harness">Builder harness</dt>
+      <dd>The harness the agent product ships with: its system prompt, tools, loop, and permission system. <a href="../modules/m00-orientation.html#harness">Taught in M00</a></dd>
+      <dt id="term-claude-md">CLAUDE.md</dt>
+      <dd>Project instructions Claude Code loads at startup from your home directory, the project, and subdirectories. <a href="../modules/m03-context-engineering.html#claude-md">Taught in M03</a></dd>
+      <dt id="term-compaction">Compaction</dt>
+      <dd>Summarising earlier turns when a long run nears the context limit. Details fade. <a href="../modules/m03-context-engineering.html#focus">Taught in M03</a></dd>
+      <dt id="term-context-window">Context window</dt>
+      <dd>Everything the model sees on a request. Fixed size, paid for on every request. <a href="../modules/m03-context-engineering.html#what-loads">Taught in M03</a></dd>
+      <dt id="term-doom-loop">Doom loop</dt>
+      <dd>An agent repeating the same failing action. Shows as identical failing calls in a row. <a href="../modules/m01-the-harness.html#failure-signatures">Taught in M01</a></dd>
+      <dt id="term-drift">Drift</dt>
+      <dd>An agent changing things the task didn&#x27;t ask for. <a href="../modules/m01-the-harness.html#failure-signatures">Taught in M01</a></dd>
+      <dt id="term-exit-code-2">Exit code 2</dt>
+      <dd>The hook exit code that blocks an action on blocking events; stderr becomes the reason. <a href="../modules/m04-hooks-and-gates.html#exit-codes">Taught in M04</a></dd>
+      <dt id="term-fleet">Fleet</dt>
+      <dd>Several narrow agents covering the SDLC as stations, passing work through files and guarded by gates. <a href="../modules/m00-orientation.html#the-fleet">Taught in M00</a></dd>
+      <dt id="term-gate">Gate</dt>
+      <dd>A check that must pass before work moves on, enforced by code (a hook, CI) or a person. <a href="../modules/m04-hooks-and-gates.html#why">Taught in M04</a></dd>
+      <dt id="term-guide">Guide</dt>
+      <dd>Part of the harness that steers the agent before it acts: instructions, tool limits, specs. <a href="../modules/m00-orientation.html#harness">Taught in M00</a></dd>
+      <dt id="term-harness">Harness</dt>
+      <dd>Everything in an agent except the model: instructions, tools, permissions, checks, and the loop. <a href="../modules/m00-orientation.html#harness">Taught in M00</a></dd>
+      <dt id="term-harness-engineering">Harness engineering</dt>
+      <dd>Treating each agent mistake as a missing guide or sensor, and adding it. <a href="../modules/m00-orientation.html#harness">Taught in M00</a></dd>
+      <dt id="term-headless-mode">Headless mode</dt>
+      <dd>Running Claude Code non-interactively with claude -p, for scripts and CI. <a href="../modules/m01-the-harness.html#headless">Taught in M01</a></dd>
+      <dt id="term-hook">Hook</dt>
+      <dd>A command Claude Code runs at a fixed point in the loop; some can block. <a href="../modules/m04-hooks-and-gates.html#why">Taught in M04</a></dd>
+      <dt id="term-least-privilege">Least privilege</dt>
+      <dd>Giving each agent only the tools and permissions its job needs. <a href="../modules/m02-writing-a-subagent.html#tools">Taught in M02</a></dd>
+      <dt id="term-matcher">Matcher</dt>
+      <dd>The filter on a hook group: exact names, a | list, or a regular expression. <a href="../modules/m04-hooks-and-gates.html#config">Taught in M04</a></dd>
+      <dt id="term-permission-mode">Permission mode</dt>
+      <dd>The baseline for which tool calls need approval: default, acceptEdits, plan, auto, dontAsk, bypassPermissions. <a href="../modules/m01-the-harness.html#permissions">Taught in M01</a></dd>
+      <dt id="term-permission-rule">Permission rule</dt>
+      <dd>An allow, ask, or deny entry such as Bash(git diff *). Deny wins. <a href="../modules/m01-the-harness.html#permissions">Taught in M01</a></dd>
+      <dt id="term-premature-done">Premature done</dt>
+      <dd>An agent finishing without verifying its work, such as no test run after the last edit. <a href="../modules/m01-the-harness.html#failure-signatures">Taught in M01</a></dd>
+      <dt id="term-progressive-disclosure">Progressive disclosure</dt>
+      <dd>Loading a skill in levels: metadata always, body when used, linked files when read. <a href="../modules/m03-context-engineering.html#skills">Taught in M03</a></dd>
+      <dt id="term-prompt-injection">Prompt injection</dt>
+      <dd>Instructions hidden in content an agent reads, such as an issue or web page. <a href="../modules/m00-orientation.html#safety">Taught in M00</a></dd>
+      <dt id="term-sensor">Sensor</dt>
+      <dd>Part of the harness that checks the agent&#x27;s work: tests, hooks, reviewers, CI. <a href="../modules/m00-orientation.html#harness">Taught in M00</a></dd>
+      <dt id="term-skill">Skill</dt>
+      <dd>A folder with a SKILL.md that teaches an agent one procedure, in the open Agent Skills format. <a href="../modules/m03-context-engineering.html#skills">Taught in M03</a></dd>
+      <dt id="term-station">Station</dt>
+      <dd>One stage of a fleet: a trigger, an agent, a handoff, and a gate. <a href="../modules/m00-orientation.html#the-fleet">Taught in M00</a></dd>
+      <dt id="term-stop-hook-active">stop_hook_active</dt>
+      <dd>Stop payload field that is true when the agent is already continuing because a Stop hook blocked it. <a href="../modules/m04-hooks-and-gates.html#stop-gate">Taught in M04</a></dd>
+      <dt id="term-stream-json">stream-json</dt>
+      <dd>Headless output format with one JSON event per line, ending in a result event. <a href="../modules/m01-the-harness.html#transcripts">Taught in M01</a></dd>
+      <dt id="term-subagent">Subagent</dt>
+      <dd>A separate agent with its own context, prompt, and tools that returns a summary to its caller. <a href="../modules/m02-writing-a-subagent.html#why">Taught in M02</a></dd>
+      <dt id="term-turn">Turn</dt>
+      <dd>One request to the model and its response. <a href="../modules/m01-the-harness.html#loop">Taught in M01</a></dd>
+      <dt id="term-user-harness">User harness</dt>
+      <dd>The harness you write: AGENTS.md, agents, skills, hooks, tests, CI. <a href="../modules/m00-orientation.html#harness">Taught in M00</a></dd>
+      <dt id="term-worktree">Worktree</dt>
+      <dd>A separate git checkout of the same repository; isolation: worktree runs an agent in one. <a href="../modules/m02-writing-a-subagent.html#budgets">Taught in M02</a></dd>
+    </dl>
+  </section>
+</main>
+</body>
+</html>

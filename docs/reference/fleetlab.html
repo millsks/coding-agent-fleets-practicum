@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fleetlab Reference · Coding Agent Fleets Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/fleetlab-src.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-agent.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-page="ref-fleetlab">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Reference · Library</p>
+    <h1>fleetlab Reference</h1>
+    <p class="lede"><code>fleetlab</code> is the small helper library used in lesson cells and lab checks. It has no
+      dependencies and never calls a model. In the browser it loads automatically when a cell imports it; locally it is
+      installed in the Pixi environment.</p>
+  </header>
+
+  <section class="lesson-section" id="frontmatter">
+    <h2>Frontmatter</h2>
+    <dl>
+      <dt><code>fleetlab.parse(text) -&gt; Document</code></dt>
+      <dd>Split a Markdown file into <code>.meta</code> (a dict of frontmatter fields) and <code>.body</code>. Handles
+        <code>key: value</code>, comma-separated and <code>[a, b]</code> lists, booleans, integers, quotes, and comments.
+        Raises <code>fleetlab.FrontmatterError</code> for missing delimiters, malformed lines, or repeated keys.</dd>
+    </dl>
+  </section>
+
+  <section class="lesson-section" id="agents">
+    <h2>Subagents</h2>
+    <dl>
+      <dt><code>fleetlab.check_agent(text, filename=None) -&gt; AgentSpec</code></dt>
+      <dd>Parse and check a subagent definition. <code>spec.problems</code> lists every problem: missing
+        <code>name</code> or <code>description</code>, a name that doesn't match the file, unknown fields, unknown tools
+        or models, bad <code>permissionMode</code>, <code>isolation</code>, <code>effort</code>, or
+        <code>maxTurns</code>, and an empty body.</dd>
+      <dt><code>AgentSpec</code></dt>
+      <dd><code>.meta</code>, <code>.prompt</code>, <code>.problems</code>, <code>.name</code>, <code>.tools</code> (the
+        effective allowlist after <code>disallowedTools</code>, or <code>None</code> when tools are inherited), and
+        <code>.can_write()</code> (true if it has an edit tool or Bash, or inherits tools).</dd>
+      <dt><code>fleetlab.load_agent(path)</code></dt>
+      <dd>Read and check a file from disk.</dd>
+      <dt><code>KNOWN_FIELDS</code>, <code>KNOWN_TOOLS</code>, <code>READ_ONLY_TOOLS</code>, <code>WRITE_TOOLS</code></dt>
+      <dd>The sets used by the checks.</dd>
+    </dl>
+  </section>
+
+  <section class="lesson-section" id="skills">
+    <h2>Skills</h2>
+    <dl>
+      <dt><code>fleetlab.check_skill(text, directory_name) -&gt; list[str]</code></dt>
+      <dd>Check a <code>SKILL.md</code>: name present, valid (lowercase, digits, single hyphens, at most 64 characters),
+        and equal to its folder; description present and at most 1,024 characters; only Agent Skills fields; a non-empty
+        body under 500 lines.</dd>
+    </dl>
+  </section>
+
+  <section class="lesson-section" id="hooks">
+    <h2>Hooks</h2>
+    <dl>
+      <dt><code>fleetlab.pre_tool_use(tool_name, tool_input=None, *, cwd=..., permission_mode="default", session_id=...)</code></dt>
+      <dd>The payload Claude Code sends to a PreToolUse hook, as a dict.</dd>
+      <dt><code>fleetlab.stop(*, active=False, last_message="Done.", cwd=..., session_id=...)</code></dt>
+      <dd>The payload for a Stop hook; <code>active</code> sets <code>stop_hook_active</code>.</dd>
+      <dt><code>fleetlab.run_hook(main, payload) -&gt; HookResult</code></dt>
+      <dd>Run a hook's <code>main()</code> in-process with the payload on stdin; captures stdout, stderr, and the exit
+        code from <code>sys.exit</code>. An uncaught exception becomes exit 1, as in a real hook.</dd>
+      <dt><code>fleetlab.run_script(path, payload, *, cwd=None, env=None, timeout=60) -&gt; HookResult</code></dt>
+      <dd>Run a hook file as a subprocess (<code>.py</code> with Python, <code>.sh</code> with bash). A hang returns
+        exit 124.</dd>
+      <dt><code>HookResult</code></dt>
+      <dd><code>.exit_code</code>, <code>.stdout</code>, <code>.stderr</code>, <code>.json</code> (stdout as one JSON
+        object or <code>None</code>), <code>.decision</code> (<code>"block"</code>, <code>"deny"</code>,
+        <code>"allow"</code>, <code>"ask"</code>, or <code>None</code>), <code>.blocked</code>, and <code>.reason</code>.</dd>
+    </dl>
+  </section>
+
+  <section class="lesson-section" id="settings">
+    <h2>Settings</h2>
+    <dl>
+      <dt><code>fleetlab.matcher_matches(matcher, tool_name) -&gt; bool</code></dt>
+      <dd>Claude Code's matcher rules: empty or <code>*</code> matches all; plain names and <code>|</code>/comma lists
+        match exactly; anything else is an unanchored regular expression.</dd>
+      <dt><code>fleetlab.hook_commands(settings, event, tool_name=None) -&gt; list[str]</code></dt>
+      <dd>The command hooks that would run for an event (and tool).</dd>
+    </dl>
+  </section>
+
+  <section class="lesson-section" id="transcripts">
+    <h2>Transcripts</h2>
+    <dl>
+      <dt><code>fleetlab.parse_stream(text) -&gt; Run</code></dt>
+      <dd>Parse <code>claude -p --output-format stream-json --verbose</code> output. Skips lines that aren't JSON
+        objects.</dd>
+      <dt><code>Run</code></dt>
+      <dd><code>.session_id</code>, <code>.model</code>, <code>.tools</code>, <code>.calls</code> (list of
+        <code>ToolCall</code>), <code>.texts</code> (main-conversation text), <code>.result</code> (the final event),
+        <code>.finished</code>, <code>.succeeded</code>, <code>.num_turns</code>, <code>.cost_usd</code>, and
+        <code>.calls_by_tool()</code>.</dd>
+      <dt><code>ToolCall</code></dt>
+      <dd><code>.id</code>, <code>.name</code>, <code>.input</code>, <code>.parent</code> (the
+        <code>parent_tool_use_id</code>, <code>None</code> for the main conversation), <code>.result</code>, and
+        <code>.is_error</code>.</dd>
+    </dl>
+  </section>
+
+  <section class="lesson-section" id="context">
+    <h2>Context</h2>
+    <dl>
+      <dt><code>fleetlab.estimate_tokens(text) -&gt; int</code></dt>
+      <dd>About four characters per token. For budgeting, never for billing.</dd>
+    </dl>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roadmap · Coding Agent Fleets Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/fleetlab-src.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-agent.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-page="ref-roadmap">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Reference · Roadmap</p>
+    <h1>Roadmap</h1>
+    <p class="lede">Level 1 takes you from one agent to a small working fleet. Stage 1 (one agent) is available now.
+      Stage 2 and the capstone come next, then two further levels for running fleets at scale.</p>
+  </header>
+
+  <section class="lesson-section" id="level-1">
+    <h2>Level 1 · Builder</h2>
+    <h3>Stage 1 · One Agent (available)</h3>
+    <ul>
+      <li><a href="../modules/m00-orientation.html">M00 How This Practicum Works</a></li>
+      <li><a href="../modules/m01-the-harness.html">M01 The Harness</a>: the loop, tools, permissions, settings, headless runs, transcripts</li>
+      <li><a href="../modules/m02-writing-a-subagent.html">M02 Writing a Subagent</a>: definitions, descriptions, prompts, least privilege</li>
+      <li><a href="../modules/m03-context-engineering.html">M03 Context Engineering</a>: AGENTS.md, CLAUDE.md, skills, the context budget</li>
+      <li><a href="../modules/m04-hooks-and-gates.html">M04 Hooks and Gates</a>: guards on risky commands and a Stop gate</li>
+    </ul>
+    <h3>Stage 2 · Many Agents (next)</h3>
+    <ul>
+      <li><strong>M05 Handoffs and Delegation</strong>: specs as contracts, subagents versus agent teams, worktrees,
+        one writer per file, and passing work through files a human can review.</li>
+      <li><strong>M06 Orchestrating in Code</strong>: driving stations from Python with the Agent SDK and
+        <code>claude -p</code>; structured output with <code>--json-schema</code>; retries, budgets, and state you own.
+        Labs grade your orchestrator against a fake <code>claude</code> binary that replays recorded runs.</li>
+      <li><strong>M07 The Fleet in CI</strong>: GitHub Actions triggers, labels as a state machine,
+        <code>anthropics/claude-code-action</code>, secrets, concurrency, timeouts, and running the same fleet under
+        Copilot and Devin through AGENTS.md, skills, and per-tool adapters.</li>
+      <li><strong>M08 Self-Healing Loops</strong>: a healer for red CI with attempt caps, no-progress detection, cost
+        limits, classification of failures, and escalation to a human.</li>
+      <li><strong>M09 Evals and Learning</strong>: replaying past tasks against harness changes, telemetry with
+        OpenTelemetry, a retrospective agent that proposes evidence-backed harness changes, and deleting rules that no
+        longer earn their place.</li>
+    </ul>
+    <h3>Capstone 1 · A Small Fleet</h3>
+    <p>Build triage → plan → build → review for shelf, driven by your own orchestrator, gated by your hooks, and
+      measured against an evaluation set of the five shelf issues.</p>
+  </section>
+
+  <section class="lesson-section" id="later-levels">
+    <h2>Levels 2 and 3</h2>
+    <ul>
+      <li><strong>Level 2 · Fleet operations</strong>: running fleets across many repositories, shared harness
+        packages, cost and quality dashboards, incident handling for agent mistakes, and governance in regulated
+        environments.</li>
+      <li><strong>Level 3 · Fleet platform</strong>: hosting agents on your own infrastructure, sandboxing and
+        network policy, MCP servers for internal systems, and designing tools for agents.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
